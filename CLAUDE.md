@@ -8,7 +8,8 @@ Early stage. "Playing with tools inspired by Remy's therapies" (per README). The
 set points at computer-vision / motion work: `mediapipe`, `opencv`, `rerun` (visualization),
 plus `numpy`/`scipy`/`pandas` and `h5py` for data.
 
-Current code: `video_capture/`, a small package wrapping OpenCV video capture.
+Current code: `video_capture/` (OpenCV capture) and `pose_estimation/` (MediaPipe pose,
+consuming `video_capture`).
 
 ## Packages
 
@@ -22,6 +23,24 @@ Current code: `video_capture/`, a small package wrapping OpenCV video capture.
   window (quit with `q`/`Esc`). Flags: `--source`, `--width`, `--height`, `--no-window`
   (headless), `--max-frames` (bounded runs). A bare-integer `--source` is treated as a camera
   index, anything else as a path/URL.
+
+### `pose_estimation/`
+
+Body-pose skeleton + joint angles, using `video_capture` for frames.
+
+- **MediaPipe API note:** this build (0.10.35, Python 3.14) ships only the **Tasks API** —
+  `mp.solutions.pose` and `mediapipe.framework` are absent. Use `PoseLandmarker` from
+  `mediapipe.tasks.python.vision`. There are no bundled drawing utils, so skeletons are drawn
+  manually with OpenCV.
+- `model.py` — `ensure_model()` downloads/caches the **lite** `.task` bundle (not shipped with
+  pip) under `pose_estimation/models/` (gitignored) on first run.
+- `estimator.py` — `PoseEstimator`, a context manager wrapping `PoseLandmarker` in VIDEO mode.
+  `detect(frame_bgr, timestamp_ms)` requires monotonically increasing timestamps. `POSE_CONNECTIONS`
+  is the skeleton edge list.
+- `angles.py` — `joint_angles()` derives elbow/shoulder/knee/hip angles from
+  `pose_world_landmarks` (metric coords; MediaPipe does not output angles itself).
+- `main.py` — CLI (`python -m pose_estimation.main`); same flags as `video_capture.main`, plus
+  `--model`. Windowed mode overlays skeleton + angles; `--no-window` prints angles.
 
 ## Environment & commands
 
@@ -38,6 +57,8 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 
 - `pixi run capture` — run the live webcam demo (`python -m video_capture.main`).
 - `pixi run capture-headless` — read 30 frames with no window; useful where there's no display.
+- `pixi run pose` — live pose skeleton + joint-angle overlay from the webcam.
+- `pixi run pose-headless` — 30 frames, no window; prints joint angles.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
 rather than run ad hoc.

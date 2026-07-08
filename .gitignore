@@ -220,3 +220,6 @@ __marimo__/
 # pixi environments
 .pixi
 *.egg-info
+
+# Downloaded MediaPipe model bundles
+pose_estimation/models/
