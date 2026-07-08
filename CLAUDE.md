@@ -5,11 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project status
 
 Early stage. "Playing with tools inspired by Remy's therapies" (per README). The dependency
-set points at computer-vision / motion work: `mediapipe`, `opencv`, `rerun` (visualization),
+set points at computer-vision / motion work: `mediapipe`, `opencv`, `rerun-sdk` (visualization),
 plus `numpy`/`scipy`/`pandas` and `h5py` for data.
 
-Current code: `video_capture/` (OpenCV capture) and `pose_estimation/` (MediaPipe pose,
-consuming `video_capture`).
+Current code: `video_capture/` (OpenCV capture), `pose_estimation/` (MediaPipe pose,
+consuming `video_capture`), and `rerun_viewer/` (logs both to the Rerun viewer).
 
 ## Packages
 
@@ -42,6 +42,20 @@ Body-pose skeleton + joint angles, using `video_capture` for frames.
 - `main.py` — CLI (`python -m pose_estimation.main`); same flags as `video_capture.main`, plus
   `--model`. Windowed mode overlays skeleton + angles; `--no-window` prints angles.
 
+### `rerun_viewer/`
+
+Streams the pipeline to the [Rerun](https://rerun.io) viewer.
+
+- **Package note:** the visualization library is **`rerun-sdk`** (imported as `rerun`). The
+  similarly named `rerun` PyPI package is an unrelated file-watcher and was replaced in
+  `pixi.toml` — do not re-add it.
+- `viewer.py` — `PoseRerunLogger.log_frame()` logs the video with a 2D skeleton overlay
+  (`video/image`), a 3D skeleton from world landmarks (`pose3d`), and scalar line plots for
+  frame rate + joint angles (`metrics/*`). Missing poses are cleared via `rr.Clear`. World
+  coords are remapped (negate y/z) so the figure stands upright.
+- `main.py` — CLI (`python -m rerun_viewer.main`); capture/model flags plus `--save PATH`
+  (write a `.rrd` instead of spawning) and `--no-spawn`. Spawns the viewer by default.
+
 ## Environment & commands
 
 The project uses [Pixi](https://pixi.sh) (conda-forge + PyPI) for dependency and environment
@@ -59,6 +73,8 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run capture-headless` — read 30 frames with no window; useful where there's no display.
 - `pixi run pose` — live pose skeleton + joint-angle overlay from the webcam.
 - `pixi run pose-headless` — 30 frames, no window; prints joint angles.
+- `pixi run rerun` — stream webcam + skeleton + metrics to the Rerun viewer.
+- `pixi run rerun-headless` — 30 frames, no viewer; writes `recording.rrd` (open with `rerun recording.rrd`).
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
 rather than run ad hoc.

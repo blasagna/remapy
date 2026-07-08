@@ -223,3 +223,6 @@ __marimo__/
 
 # Downloaded MediaPipe model bundles
 pose_estimation/models/
+
+# Rerun recordings
+*.rrd

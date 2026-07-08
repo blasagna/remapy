@@ -5,7 +5,7 @@ Remy + therapy + python = remapy
 
 ## TODO
 
-- [ ] add rerun viewer of image, pose, line plots for joint angles and frame rate
+- [x] add rerun viewer of image, pose, line plots for joint angles and frame rate
 - [ ] record hdf5 files
 - [ ] factor out libraries with unit tests
 - [ ] try pose model on a child, in seated position
