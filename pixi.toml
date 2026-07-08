@@ -6,6 +6,8 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+capture = "python -m video_capture.main"
+capture-headless = "python -m video_capture.main --no-window --max-frames 30"
 
 [dependencies]
 python = ">=3.14.6,<3.15"
