@@ -19,6 +19,7 @@ import time
 
 from face_blur.blur import FaceBlurrer
 from pose_estimation.estimator import PoseEstimator
+from recording.recorder import HDF5Recorder
 from video_capture.capture import CaptureError, VideoCapture
 
 from .viewer import PoseRerunLogger
@@ -75,6 +76,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="box = solid fill (irreversible, default); mosaic = blocky pixelation.",
     )
     parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
+    parser.add_argument(
+        "--record", default=None, help="Also write an HDF5 recording to this path (offline analysis)."
+    )
+    parser.add_argument(
+        "--record-video", default=None, help="With --record, also write a parallel mp4 to this path."
+    )
     return parser.parse_args(argv)
 
 
@@ -92,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.blur_faces
         else None
     )
+    recorder = None
     try:
         logger = PoseRerunLogger(
             spawn=not args.no_spawn,
@@ -106,6 +114,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Recording to {args.save}. Press Ctrl+C to stop.")
             else:
                 print("Streaming to the Rerun viewer. Press Ctrl+C to stop.")
+            if args.record:
+                print(f"Writing HDF5 recording to {args.record}.")
+                recorder = HDF5Recorder(
+                    args.record,
+                    jpeg_quality=args.jpeg_quality,
+                    video_path=args.record_video,
+                    model_name=args.model or "pose_landmarker_lite",
+                    blur_style=args.blur_style if args.blur_faces else None,
+                    faces_blurred=args.blur_faces,
+                )
 
             start = time.monotonic()
             prev = start
@@ -124,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
                 if blurrer is not None:
                     blurrer.blur(frame)
                 logger.log_frame(count, now - start, fps, frame, result)
+                if recorder is not None:
+                    recorder.append(frame, timestamp_ms, result)
 
                 if args.max_frames is not None and count >= args.max_frames:
                     break
@@ -134,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nInterrupted; shutting down.")
     finally:
+        if recorder is not None:
+            recorder.close()
         if blurrer is not None:
             blurrer.close()
 

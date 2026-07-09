@@ -12,6 +12,9 @@ pose = "python -m pose_estimation.main"
 pose-headless = "python -m pose_estimation.main --no-window --max-frames 30"
 rerun = "python -m rerun_viewer.main"
 rerun-headless = "python -m rerun_viewer.main --no-spawn --save recording.rrd --max-frames 30"
+record = "python -m recording.main --output recording.hdf5"
+record-headless = "python -m recording.main --output recording.hdf5 --max-frames 30"
+export-video = "python -m recording.export"
 
 [dependencies]
 python = ">=3.14.6,<3.15"

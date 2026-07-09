@@ -229,3 +229,8 @@ pose_estimation/models/
 
 # Downloaded face detector model
 face_blur/models/
+
+# HDF5 recordings and exported video
+*.h5
+*.hdf5
+*.mp4

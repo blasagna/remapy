@@ -9,8 +9,8 @@ set points at computer-vision / motion work: `mediapipe`, `opencv`, `rerun-sdk` 
 plus `numpy`/`scipy`/`pandas` and `h5py` for data.
 
 Current code: `video_capture/` (OpenCV capture), `pose_estimation/` (MediaPipe pose,
-consuming `video_capture`), `face_blur/` (MediaPipe face redaction), and `rerun_viewer/`
-(logs the pipeline to the Rerun viewer).
+consuming `video_capture`), `face_blur/` (MediaPipe face redaction), `rerun_viewer/`
+(logs the pipeline to the Rerun viewer), and `recording/` (HDF5 recording for offline analysis).
 
 ## Packages
 
@@ -84,8 +84,32 @@ Streams the pipeline to the [Rerun](https://rerun.io) viewer.
   explicitly (the `init(spawn=True)` bool form can't forward the limit).
 - `main.py` — CLI (`python -m rerun_viewer.main`); capture/model flags plus `--save PATH`
   (write a `.rrd` instead of spawning), `--no-spawn`, `--memory-limit` (default `75%`; live
-  path only — a no-op under `--save`), and `--jpeg-quality` (default `75`). Spawns the viewer
-  by default.
+  path only — a no-op under `--save`), `--jpeg-quality` (default `75`), and `--record PATH.h5`
+  / `--record-video PATH.mp4` (write an HDF5 recording alongside — see `recording/`). Spawns
+  the viewer by default.
+
+### `recording/`
+
+Compact, SciPy-native session recording for offline analysis — an archival alternative to the
+Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are recomputed on read.
+
+- **Philosophy:** persist the face-blurred video + the pose model's raw landmark outputs, and
+  recompute anything derivable (joint angles, fps, pose-present, 2D pixel points) from those.
+- **Video-in-HDF5:** frames are stored as per-frame JPEG blobs in a `vlen` uint8 dataset (frame
+  `i` aligns with landmark row `i`). Chosen over an mp4 sidecar because **H.264 is unavailable**
+  in this OpenCV build (VideoWriter only does `mp4v`/`XVID`/`MJPG`).
+- `recorder.py` — `HDF5Recorder`, a context manager. `append(frame_bgr, timestamp_ms, result)`
+  writes JPEG + landmark rows (NaN rows when no pose); datasets are resizable/gzip'd and created
+  lazily on the first frame; metadata (landmark names, 35-pair connections, image size, model +
+  mediapipe version, blur style, coordinate conventions) is written as attrs. Optional
+  `video_path` also writes a parallel `mp4v` file.
+- `reader.py` — `Recording`, a read-only loader exposing arrays (`landmarks_world`, etc.),
+  `pose_present`, `fps()`, `frame(i)` (JPEG-decoded), and `angles()` (recomputed via
+  `pose_estimation.angles.joint_angles`, returned as a pandas DataFrame).
+- `export.py` — `export_mp4()` / `python -m recording.export session.h5 out.mp4` reconstructs an
+  mp4 (mp4v) from the stored JPEG frames; fps defaults to the median of recorded timestamps.
+- `main.py` — standalone CLI (`python -m recording.main`); same capture/pose/blur flags as the
+  other CLIs plus `--output` and `--video`.
 
 ## Environment & commands
 
@@ -106,6 +130,9 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run pose-headless` — 30 frames, no window; prints joint angles.
 - `pixi run rerun` — stream webcam + skeleton + metrics to the Rerun viewer.
 - `pixi run rerun-headless` — 30 frames, no viewer; writes `recording.rrd` (open with `rerun recording.rrd`).
+- `pixi run record` — record webcam + pose to `recording.hdf5` for offline analysis.
+- `pixi run record-headless` — record 30 frames to `recording.hdf5` (bounded run).
+- `pixi run export-video <in.hdf5> <out.mp4> [--fps N]` — rebuild an mp4 from a recording's stored frames.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
 rather than run ad hoc.
