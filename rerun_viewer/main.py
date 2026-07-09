@@ -17,6 +17,7 @@ Press Ctrl+C in the terminal to quit.
 import argparse
 import time
 
+from face_blur.blur import FaceBlurrer
 from pose_estimation.estimator import PoseEstimator
 from video_capture.capture import CaptureError, VideoCapture
 
@@ -61,6 +62,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=75,
         help="JPEG quality (1-100) for the logged video frames. Default: 75.",
     )
+    parser.add_argument(
+        "--blur-faces",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Redact detected faces for privacy before logging. On by default.",
+    )
+    parser.add_argument(
+        "--blur-style",
+        choices=["box", "mosaic"],
+        default="box",
+        help="box = solid fill (irreversible, default); mosaic = blocky pixelation.",
+    )
+    parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
     return parser.parse_args(argv)
 
 
@@ -73,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     source = _resolve_source(args.source)
 
+    blurrer = (
+        FaceBlurrer(model_path=args.face_model, style=args.blur_style)
+        if args.blur_faces
+        else None
+    )
     try:
         logger = PoseRerunLogger(
             spawn=not args.no_spawn,
@@ -100,6 +119,10 @@ def main(argv: list[str] | None = None) -> int:
 
                 timestamp_ms = int((now - start) * 1000)
                 result = pose.detect(frame, timestamp_ms)
+
+                # Redact faces before logging so recordings never hold raw faces.
+                if blurrer is not None:
+                    blurrer.blur(frame)
                 logger.log_frame(count, now - start, fps, frame, result)
 
                 if args.max_frames is not None and count >= args.max_frames:
@@ -110,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except KeyboardInterrupt:
         print("\nInterrupted; shutting down.")
+    finally:
+        if blurrer is not None:
+            blurrer.close()
 
     return 0
 

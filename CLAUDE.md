@@ -9,7 +9,8 @@ set points at computer-vision / motion work: `mediapipe`, `opencv`, `rerun-sdk` 
 plus `numpy`/`scipy`/`pandas` and `h5py` for data.
 
 Current code: `video_capture/` (OpenCV capture), `pose_estimation/` (MediaPipe pose,
-consuming `video_capture`), and `rerun_viewer/` (logs both to the Rerun viewer).
+consuming `video_capture`), `face_blur/` (MediaPipe face redaction), and `rerun_viewer/`
+(logs the pipeline to the Rerun viewer).
 
 ## Packages
 
@@ -42,6 +43,29 @@ Body-pose skeleton + joint angles, using `video_capture` for frames.
   `pose_world_landmarks` (metric coords; MediaPipe does not output angles itself).
 - `main.py` — CLI (`python -m pose_estimation.main`); same flags as `video_capture.main`, plus
   `--model`. Windowed mode overlays skeleton + angles; `--no-window` prints angles.
+
+### `face_blur/`
+
+Privacy redaction of faces in the video stream, used by every entry point.
+
+- **MediaPipe API note:** same Tasks-only build as `pose_estimation`. Uses `FaceDetector`
+  (blaze_face short-range) in VIDEO mode. `model.py` mirrors `pose_estimation/model.py` —
+  `ensure_model()` downloads/caches the ~230 KB `.tflite` under `face_blur/models/`
+  (gitignored). The download helper is duplicated (not imported from `pose_estimation`) to keep
+  the package decoupled; unifying them is the "factor out libraries" TODO.
+- `blur.py` — `FaceBlurrer`, a context manager. `blur(frame_bgr)` detects and redacts every
+  face **in place**; it manages its own monotonically increasing timestamp, so callers pass no
+  timestamp. `style="box"` (default) fills each face with a solid rectangle — **irreversible**;
+  `style="mosaic"` pixelates — natural but only weak de-identification (recoverable by ML
+  re-identification). Boxes are padded ~15% before redaction.
+- **Redaction is applied to the image sink only** (window / Rerun log), always after detection
+  runs on the raw frame, so pose accuracy is unaffected and only redacted frames are ever
+  shown/recorded. In `--no-window` headless runs (no image sink) blur is skipped.
+
+The three CLIs (`video_capture`, `pose_estimation`, `rerun_viewer`) each expose `--blur-faces`
+/ `--no-blur-faces` (**default on**), `--blur-style {box,mosaic}` (default `box`), and
+`--face-model`. So `pixi run capture|pose|rerun` redact faces by default; opt out with
+`--no-blur-faces`.
 
 ### `rerun_viewer/`
 

@@ -16,6 +16,8 @@ import argparse
 
 import cv2
 
+from face_blur.blur import FaceBlurrer
+
 from .capture import CaptureError, VideoCapture
 
 WINDOW_NAME = "remapy video_capture"
@@ -42,6 +44,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not open a display window; just read frames (headless).",
     )
+    parser.add_argument(
+        "--blur-faces",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Redact detected faces for privacy. On by default.",
+    )
+    parser.add_argument(
+        "--blur-style",
+        choices=["box", "mosaic"],
+        default="box",
+        help="box = solid fill (irreversible, default); mosaic = blocky pixelation.",
+    )
+    parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
     return parser.parse_args(argv)
 
 
@@ -54,6 +69,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     source = _resolve_source(args.source)
 
+    blurrer = (
+        FaceBlurrer(model_path=args.face_model, style=args.blur_style)
+        if args.blur_faces
+        else None
+    )
     try:
         with VideoCapture(source, width=args.width, height=args.height) as cap:
             print(f"Opened source {source!r} at resolution {cap.resolution[0]}x{cap.resolution[1]}")
@@ -65,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
             for frame in cap.frames():
                 count += 1
                 if not args.no_window:
+                    if blurrer is not None:
+                        blurrer.blur(frame)
                     cv2.imshow(WINDOW_NAME, frame)
                     if cv2.waitKey(1) & 0xFF in QUIT_KEYS:
                         break
@@ -78,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         print("\nInterrupted; shutting down.")
     finally:
         cv2.destroyAllWindows()
+        if blurrer is not None:
+            blurrer.close()
 
     return 0
 

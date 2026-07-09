@@ -226,3 +226,6 @@ pose_estimation/models/
 
 # Rerun recordings
 *.rrd
+
+# Downloaded face detector model
+face_blur/models/
