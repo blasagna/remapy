@@ -10,8 +10,6 @@ Rerun viewer:
 Uses the rerun-sdk API (NOT the unrelated ``rerun`` file-watcher package).
 """
 
-from __future__ import annotations
-
 import cv2
 import numpy as np
 import rerun as rr

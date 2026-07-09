@@ -4,8 +4,6 @@ MediaPipe does not output joint angles, but they are easy to derive: the angle
 at a joint is the angle between the two bone vectors that meet there.
 """
 
-from __future__ import annotations
-
 import numpy as np
 from mediapipe.tasks.python.vision import PoseLandmark as L
 

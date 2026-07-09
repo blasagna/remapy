@@ -5,8 +5,6 @@ the pip package. We default to the "lite" bundle — the fastest tier, well suit
 to a live webcam — and cache it under ``pose_estimation/models/``.
 """
 
-from __future__ import annotations
-
 import urllib.request
 from pathlib import Path
 

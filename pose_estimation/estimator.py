@@ -5,8 +5,6 @@ This build of MediaPipe (0.10.x) ships only the Tasks API, so we use
 ``video_capture`` library.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Optional
 
@@ -76,7 +74,7 @@ class PoseEstimator:
             self._landmarker.close()
             self._landmarker = None
 
-    def __enter__(self) -> "PoseEstimator":
+    def __enter__(self) -> PoseEstimator:
         return self
 
     def __exit__(self, *_exc: object) -> None:

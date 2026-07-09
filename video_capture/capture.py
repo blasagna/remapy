@@ -4,8 +4,6 @@ The wrapper is a context manager that yields frames as NumPy arrays and takes
 care of opening/releasing the underlying device.
 """
 
-from __future__ import annotations
-
 from typing import Iterator, Optional
 
 import cv2
@@ -40,7 +38,7 @@ class VideoCapture:
         self.height = height
         self._cap: Optional[cv2.VideoCapture] = None
 
-    def open(self) -> "VideoCapture":
+    def open(self) -> VideoCapture:
         """Open the underlying device. Returns ``self`` for chaining."""
         cap = cv2.VideoCapture(self.source)
         if self.width is not None:
@@ -93,7 +91,7 @@ class VideoCapture:
             self._cap.release()
             self._cap = None
 
-    def __enter__(self) -> "VideoCapture":
+    def __enter__(self) -> VideoCapture:
         return self.open()
 
     def __exit__(self, *_exc: object) -> None:

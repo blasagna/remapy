@@ -14,8 +14,6 @@ Open a saved recording later with:  rerun recording.rrd
 Press Ctrl+C in the terminal to quit.
 """
 
-from __future__ import annotations
-
 import argparse
 import time
 

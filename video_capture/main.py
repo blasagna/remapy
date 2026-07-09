@@ -12,8 +12,6 @@ Point at a different device or a video file::
 Press ``q`` or ``Esc`` in the window to quit.
 """
 
-from __future__ import annotations
-
 import argparse
 
 import cv2

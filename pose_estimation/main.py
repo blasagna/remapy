@@ -13,8 +13,6 @@ Run::
 Press ``q`` or ``Esc`` in the window to quit (or Ctrl+C in the terminal).
 """
 
-from __future__ import annotations
-
 import argparse
 import time
 
