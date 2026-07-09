@@ -52,9 +52,15 @@ Streams the pipeline to the [Rerun](https://rerun.io) viewer.
 - `viewer.py` — `PoseRerunLogger.log_frame()` logs the video with a 2D skeleton overlay
   (`video/image`), a 3D skeleton from world landmarks (`pose3d`), and scalar line plots for
   frame rate + joint angles (`metrics/*`). Missing poses are cleared via `rr.Clear`. World
-  coords are remapped (negate y/z) so the figure stands upright.
+  coords are remapped (negate y/z) so the figure stands upright. Frames are JPEG-encoded
+  (`cv2.imencode` on BGR → `rr.EncodedImage`) to keep the viewer's in-memory store small.
+- **Memory note:** when spawning (not `--save`), the viewer holds the whole stream in RAM,
+  evicting oldest data past its `memory_limit`. The logger calls `rr.spawn(memory_limit=...)`
+  explicitly (the `init(spawn=True)` bool form can't forward the limit).
 - `main.py` — CLI (`python -m rerun_viewer.main`); capture/model flags plus `--save PATH`
-  (write a `.rrd` instead of spawning) and `--no-spawn`. Spawns the viewer by default.
+  (write a `.rrd` instead of spawning), `--no-spawn`, `--memory-limit` (default `75%`; live
+  path only — a no-op under `--save`), and `--jpeg-quality` (default `75`). Spawns the viewer
+  by default.
 
 ## Environment & commands
 

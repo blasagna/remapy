@@ -12,6 +12,7 @@ Uses the rerun-sdk API (NOT the unrelated ``rerun`` file-watcher package).
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import rerun as rr
 
@@ -43,11 +44,17 @@ class PoseRerunLogger:
         application_id: str = "remapy pose",
         spawn: bool = True,
         save_path: str | None = None,
+        memory_limit: str = "75%",
+        jpeg_quality: int = 75,
     ) -> None:
-        # When saving to a file we must not also spawn a viewer.
-        rr.init(application_id, spawn=spawn and save_path is None)
+        self._jpeg_quality = int(jpeg_quality)
+        rr.init(application_id)
+        # Saving and spawning are mutually exclusive sinks; spawn explicitly so we
+        # can pass the viewer's in-memory store limit.
         if save_path is not None:
             rr.save(save_path)
+        elif spawn:
+            rr.spawn(memory_limit=memory_limit)
 
     def log_frame(
         self,
@@ -62,7 +69,13 @@ class PoseRerunLogger:
         rr.set_time(FRAME_TIMELINE, sequence=frame_count)
         rr.set_time(TIME_TIMELINE, duration=elapsed_s)
 
-        rr.log("video/image", rr.Image(frame_bgr[:, :, ::-1]))  # BGR -> RGB
+        # JPEG-encode the frame to keep the viewer's in-memory store small. cv2
+        # encodes directly from BGR, so no color conversion is needed here.
+        ok, buf = cv2.imencode(
+            ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
+        )
+        if ok:
+            rr.log("video/image", rr.EncodedImage(contents=buf.tobytes(), media_type="image/jpeg"))
         rr.log("metrics/fps", rr.Scalars(fps))
 
         if not result.pose_landmarks:
@@ -72,7 +85,7 @@ class PoseRerunLogger:
             return
 
         self._log_skeleton_2d(frame_bgr.shape, result.pose_landmarks[0])
-        self._log_skeleton_3d(result.pose_world_landmarks[0])
+        # self._log_skeleton_3d(result.pose_world_landmarks[0])
         self._log_angles(result.pose_world_landmarks[0])
 
     def _log_skeleton_2d(self, shape, landmarks) -> None:

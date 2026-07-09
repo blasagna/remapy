@@ -51,6 +51,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not spawn the viewer (e.g. to connect an already-running one).",
     )
+    parser.add_argument(
+        "--memory-limit",
+        default="75%",
+        help="Viewer in-memory store cap; oldest data is dropped past it "
+        "(e.g. '2GB', '50%%'). Default: 75%% of system RAM.",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=75,
+        help="JPEG quality (1-100) for the logged video frames. Default: 75.",
+    )
     return parser.parse_args(argv)
 
 
@@ -64,7 +76,12 @@ def main(argv: list[str] | None = None) -> int:
     source = _resolve_source(args.source)
 
     try:
-        logger = PoseRerunLogger(spawn=not args.no_spawn, save_path=args.save)
+        logger = PoseRerunLogger(
+            spawn=not args.no_spawn,
+            save_path=args.save,
+            memory_limit=args.memory_limit,
+            jpeg_quality=args.jpeg_quality,
+        )
         with VideoCapture(source, width=args.width, height=args.height) as cap, \
                 PoseEstimator(model_path=args.model) as pose:
             print(f"Opened source {source!r} at resolution {cap.resolution[0]}x{cap.resolution[1]}")
