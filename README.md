@@ -6,7 +6,7 @@ Remy + therapy + python = remapy
 ## TODO
 
 - [x] add rerun viewer of image, pose, line plots for joint angles and frame rate
-- [ ] move logic out of `__init__.py` files
+- [x] move logic out of `__init__.py` files
 - [ ] blur faces
 - [ ] record hdf5 files
 - [ ] factor out libraries with unit tests

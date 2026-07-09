@@ -20,7 +20,7 @@ import argparse
 import time
 
 from pose_estimation.estimator import PoseEstimator
-from video_capture import CaptureError, VideoCapture
+from video_capture.capture import CaptureError, VideoCapture
 
 from .viewer import PoseRerunLogger
 

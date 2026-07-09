@@ -20,7 +20,7 @@ import time
 
 import cv2
 
-from video_capture import CaptureError, VideoCapture
+from video_capture.capture import CaptureError, VideoCapture
 
 from .angles import joint_angles
 from .estimator import POSE_CONNECTIONS, PoseEstimator
