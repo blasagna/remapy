@@ -6,6 +6,7 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+list-devices = "python -m list_devices.main"
 capture = "python -m video_capture.main"
 capture-headless = "python -m video_capture.main --no-window --max-frames 30"
 pose = "python -m pose_estimation.main"

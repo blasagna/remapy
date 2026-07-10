@@ -10,7 +10,8 @@ plus `numpy`/`scipy`/`pandas` and `h5py` for data.
 
 Current code: `video_capture/` (OpenCV capture), `pose_estimation/` (MediaPipe pose,
 consuming `video_capture`), `face_blur/` (MediaPipe face redaction), `rerun_viewer/`
-(logs the pipeline to the Rerun viewer), and `recording/` (HDF5 recording for offline analysis).
+(logs the pipeline to the Rerun viewer), `recording/` (HDF5 recording for offline analysis),
+and `list_devices/` (enumerate compatible capture devices).
 
 ## Packages
 
@@ -111,6 +112,22 @@ Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are re
 - `main.py` — standalone CLI (`python -m recording.main`); same capture/pose/blur flags as the
   other CLIs plus `--output` and `--video`.
 
+### `list_devices/`
+
+Discovery helper: which capture devices can the other CLIs actually use? Compatibility is
+defined exactly as `video_capture` uses it — a camera *index* that `cv2.VideoCapture` can open
+**and read a frame from** — so a listed device is one you can pass to any entry point via
+`--source <index>`.
+
+- `devices.py` — `DeviceInfo` (index, resolution, fps, backend, plus V4L2 `name`/`node`) and
+  `enumerate_devices()`, which probes indices `0..max_index` (extended on Linux to cover any
+  higher `/dev/videoN` node). `probe_index()` mirrors `VideoCapture.open()` + `read()` so
+  phantom/metadata-only nodes that open but never yield a frame are filtered out. OpenCV's
+  logger is silenced during the scan so probing empty indices is quiet.
+- `main.py` — CLI (`python -m list_devices.main`); prints a per-device summary with the
+  `--source <index>` to reuse. `--json` for machine-readable output, `--max-index` to widen the
+  scan. Exit code `1` (not `0`) when no device is found.
+
 ## Environment & commands
 
 The project uses [Pixi](https://pixi.sh) (conda-forge + PyPI) for dependency and environment
@@ -124,6 +141,7 @@ management. The env is pinned to `linux-64` and Python 3.14.
 
 Tasks defined under `[tasks]` in `pixi.toml`:
 
+- `pixi run list-devices` — list capture devices and the `--source` index to use for each.
 - `pixi run capture` — run the live webcam demo (`python -m video_capture.main`).
 - `pixi run capture-headless` — read 30 frames with no window; useful where there's no display.
 - `pixi run pose` — live pose skeleton + joint-angle overlay from the webcam.
