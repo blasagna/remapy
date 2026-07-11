@@ -41,11 +41,17 @@ def _format_device(dev: DeviceInfo) -> str:
     parts = [f"  [{dev.index}] {label}"]
     if dev.node:
         parts.append(f"      node:       {dev.node}")
-    parts.append(f"      resolution: {dev.width}x{dev.height}")
+    parts.append(f"      default:    {dev.default_width}x{dev.default_height}")
+    parts.append(f"      max:        {dev.max_width}x{dev.max_height}")
     if dev.fps > 0:
         parts.append(f"      fps:        {dev.fps:g}")
     parts.append(f"      backend:    {dev.backend}")
     parts.append(f"      use with:   --source {dev.source_arg}")
+    if (dev.max_width, dev.max_height) != (dev.default_width, dev.default_height):
+        parts.append(
+            f"      max res:    --source {dev.source_arg} "
+            f"--width {dev.max_width} --height {dev.max_height}"
+        )
     return "\n".join(parts)
 
 

@@ -27,8 +27,13 @@ class DeviceInfo:
     ----------
     index:
         The camera index. Pass it to any CLI as ``--source <index>``.
-    width, height:
-        Actual frame size reported by the device.
+    default_width, default_height:
+        Frame size the device reports when opened without a size request — what
+        the CLIs capture at unless you pass ``--width``/``--height``.
+    max_width, max_height:
+        Largest frame size the device accepts, found by requesting an oversized
+        frame and reading back what the driver clamps to. Pass these as
+        ``--width``/``--height`` for the highest-resolution capture.
     fps:
         Frame rate reported by the device (``0.0`` if unknown).
     backend:
@@ -40,8 +45,10 @@ class DeviceInfo:
     """
 
     index: int
-    width: int
-    height: int
+    default_width: int
+    default_height: int
+    max_width: int
+    max_height: int
     fps: float
     backend: str
     name: Optional[str] = None
@@ -94,14 +101,26 @@ def probe_index(index: int) -> Optional[DeviceInfo]:
     try:
         if not cap.isOpened():
             return None
+        # Default mode the device opens in (what the CLIs capture at by default).
+        default_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        default_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         ok, frame = cap.read()
         if not ok or frame is None:
             return None
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+        # Ask for an absurdly large frame; the driver clamps to its max mode, and
+        # reading the property back reveals that maximum.
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 100000)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 100000)
+        max_w = max(default_w, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        max_h = max(default_h, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
         return DeviceInfo(
             index=index,
-            width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-            fps=float(cap.get(cv2.CAP_PROP_FPS)),
+            default_width=default_w,
+            default_height=default_h,
+            max_width=max_w,
+            max_height=max_h,
+            fps=fps,
             backend=cap.getBackendName(),
         )
     finally:
