@@ -35,8 +35,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="0",
         help="Camera index (default: 0, the built-in webcam) or a video file/URL.",
     )
-    parser.add_argument("--width", type=int, default=None, help="Requested frame width.")
-    parser.add_argument("--height", type=int, default=None, help="Requested frame height.")
+    parser.add_argument("--width", type=int, default=1280, help="Requested frame width (default: 1280).")
+    parser.add_argument("--height", type=int, default=720, help="Requested frame height (default: 720).")
     parser.add_argument("--model", default=None, help="Path to a pose_landmarker .task file.")
     parser.add_argument(
         "--max-frames",

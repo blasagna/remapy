@@ -25,7 +25,8 @@ and `list_devices/` (enumerate compatible capture devices).
 - `main.py` — example CLI (`python -m video_capture.main`) that displays the webcam feed in a
   window (quit with `q`/`Esc`). Flags: `--source`, `--width`, `--height`, `--no-window`
   (headless), `--max-frames` (bounded runs). A bare-integer `--source` is treated as a camera
-  index, anything else as a path/URL.
+  index, anything else as a path/URL. All four CLIs request **1280×720** by default
+  (`--width`/`--height` override; the device picks the nearest supported mode).
 
 ### `pose_estimation/`
 
