@@ -18,7 +18,7 @@ import time
 
 import cv2
 
-from face_blur.blur import FaceBlurrer
+from face_blur.factory import BLUR_METHODS, build_blurrer
 from video_capture.capture import CaptureError, VideoCapture
 
 from .angles import joint_angles
@@ -61,6 +61,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="box",
         help="box = solid fill (irreversible, default); mosaic = blocky pixelation.",
     )
+    parser.add_argument(
+        "--blur-method",
+        choices=BLUR_METHODS,
+        default="hybrid",
+        help="hybrid (default) = pose keypoints when a pose is present, else the "
+        "detector; pose = pose keypoints only (more reliable when a body is "
+        "tracked); detector = standalone FaceDetector only.",
+    )
     parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
     return parser.parse_args(argv)
 
@@ -95,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     source = _resolve_source(args.source)
 
     blurrer = (
-        FaceBlurrer(model_path=args.face_model, style=args.blur_style)
+        build_blurrer(args.blur_method, style=args.blur_style, model_path=args.face_model)
         if args.blur_faces
         else None
     )
@@ -117,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 # Redact faces before drawing, so the skeleton stays visible on top.
                 if blurrer is not None and not args.no_window:
-                    blurrer.blur(frame)
+                    blurrer.blur(frame, result)
 
                 have_pose = bool(result.pose_landmarks)
                 if have_pose:

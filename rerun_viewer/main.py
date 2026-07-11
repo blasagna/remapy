@@ -17,7 +17,7 @@ Press Ctrl+C in the terminal to quit.
 import argparse
 import time
 
-from face_blur.blur import FaceBlurrer
+from face_blur.factory import BLUR_METHODS, build_blurrer
 from pose_estimation.estimator import PoseEstimator
 from recording.recorder import HDF5Recorder
 from video_capture.capture import CaptureError, VideoCapture
@@ -75,6 +75,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="box",
         help="box = solid fill (irreversible, default); mosaic = blocky pixelation.",
     )
+    parser.add_argument(
+        "--blur-method",
+        choices=BLUR_METHODS,
+        default="hybrid",
+        help="hybrid (default) = pose keypoints when a pose is present, else the "
+        "detector; pose = pose keypoints only (more reliable when a body is "
+        "tracked); detector = standalone FaceDetector only.",
+    )
     parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
     parser.add_argument(
         "--record", default=None, help="Also write an HDF5 recording to this path (offline analysis)."
@@ -95,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     source = _resolve_source(args.source)
 
     blurrer = (
-        FaceBlurrer(model_path=args.face_model, style=args.blur_style)
+        build_blurrer(args.blur_method, style=args.blur_style, model_path=args.face_model)
         if args.blur_faces
         else None
     )
@@ -140,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 # Redact faces before logging so recordings never hold raw faces.
                 if blurrer is not None:
-                    blurrer.blur(frame)
+                    blurrer.blur(frame, result)
                 logger.log_frame(count, now - start, fps, frame, result)
                 if recorder is not None:
                     recorder.append(frame, timestamp_ms, result)
