@@ -5,12 +5,8 @@ Remy + therapy + python = remapy
 
 ## TODO
 
-- [x] add rerun viewer of image, pose, line plots for joint angles and frame rate
-- [x] move logic out of `__init__.py` files
-- [x] blur faces
-- [x] record hdf5 files
-- [x] try pose model on a child, in seated position
-- [ ] factor out libraries with unit tests
+- [ ] organize rerun viewer into larger video with smaller or separate pane of line plots
+- [ ] record annotations or labels of data
 - [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
 - [ ] consider multiple camera views
 - [ ] consider adding IMUs at trunk, head, waist, shoulders

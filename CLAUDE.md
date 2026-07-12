@@ -175,9 +175,26 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run record` — record webcam + pose to `recording.hdf5` for offline analysis.
 - `pixi run record-headless` — record 30 frames to `recording.hdf5` (bounded run).
 - `pixi run export-video <in.hdf5> <out.mp4> [--fps N]` — rebuild an mp4 from a recording's stored frames.
+- `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
 rather than run ad hoc.
+
+## Tests
+
+`tests/` holds `unittest` coverage for the reusable libraries (not the CLIs). Run with `pixi run
+test`. Every external boundary is mocked so the suite needs no camera, network, model download,
+display, or GPU and runs in well under a second:
+
+- `tests/fakes.py` — shared duck-typed stand-ins: MediaPipe landmark/pose/detection results, an
+  opened `cv2.VideoCapture` (`FakeCapture`), and `cv2.VideoWriter` (`FakeVideoWriter`).
+- `cv2.VideoCapture`/`VideoWriter` are patched; the native MediaPipe `PoseLandmarker`/
+  `FaceDetector` are patched at their import site (`ensure_model` + the class) so no model loads;
+  `urllib.request.urlretrieve` is patched in the `ensure_model` tests; the `rerun` SDK is patched
+  (`rerun_viewer.viewer.rr`). HDF5 recordings are written to real temp files (fast, self-contained).
+- Pure logic (`redact`, `angles`, `pose_blur`, `factory`) runs unmocked against real NumPy/OpenCV.
+- Discovery is `python -m unittest discover -s tests -t .`; run from the repo root so the packages
+  import. `tests/` is a package (`__init__.py`) so `from tests.fakes import …` resolves.
 
 ## Notes
 
