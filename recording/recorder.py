@@ -20,6 +20,14 @@ Layout::
     /pose/visibility      (N, 33)      float32
     /pose/presence        (N, 33)      float32
 
+An optional ``/feather/<stream>`` group per Feather Sense stream (accel, gyro,
+mag, gravity, linear_accel, env, altitude, battery, error) may also be present
+when that device was streaming over USB serial. Each holds its own
+``timestamps_ms`` (device clock) plus an ``(M, K)`` float32 ``values`` dataset
+(or ``source``/``message`` string columns for ``error``), grown independently
+since the streams are asynchronous and multi-rate. Written via
+:meth:`HDF5Recorder.append_sensor`, read back via ``recording.reader.Recording.feather``.
+
 An optional ``/annotations`` group (labeled time segments) may be added *after*
 recording by ``recording.annotations.AnnotationStore``; it is absent here.
 """
@@ -72,6 +80,9 @@ class HDF5Recorder:
         self._writer: Optional[cv2.VideoWriter] = None
         self._ready = False
         self._n = 0
+        # Per-stream Feather Sense sensor datasets, created lazily (see
+        # append_sensor). Async + multi-rate, so kept separate from the frames.
+        self._feather: dict = {}
 
     def _init_datasets(self, height: int, width: int) -> None:
         f = self._file
@@ -164,6 +175,59 @@ class HDF5Recorder:
             self._writer.write(frame_bgr)
 
         self._n += 1
+
+    def append_sensor(self, name: str, timestamp_ms: int, values, fields=None) -> None:
+        """Append one Feather Sense sample to its own ``/feather/<name>`` stream.
+
+        Datasets are created on first sight of each stream (its arity is taken
+        from ``values``), so streams that arrive at different rates each grow
+        independently. Numeric streams store an ``(M, K)`` float32 ``values``
+        array; the ``error`` stream stores ``source`` + ``message`` string
+        columns. ``timestamps_ms`` is the device clock (ms since board boot).
+        """
+        if self._file is None:
+            raise RuntimeError("HDF5Recorder is closed.")
+        store = self._feather.get(name)
+        if store is None:
+            store = self._create_feather_stream(name, values, fields)
+            self._feather[name] = store
+
+        i = store["n"]
+        store["ts"].resize((i + 1,))
+        store["ts"][i] = int(timestamp_ms)
+        if store["kind"] == "error":
+            store["source"].resize((i + 1,))
+            store["source"][i] = str(values[0])
+            store["message"].resize((i + 1,))
+            store["message"][i] = str(values[1])
+        else:
+            store["values"].resize((i + 1, store["k"]))
+            store["values"][i] = np.asarray(values, dtype="float32")
+        store["n"] = i + 1
+
+    def _create_feather_stream(self, name: str, values, fields) -> dict:
+        grp = self._file.create_group(f"feather/{name}")
+        ts = grp.create_dataset(
+            "timestamps_ms", (0,), maxshape=(None,), dtype="int64", chunks=(256,),
+            compression="gzip",
+        )
+        if fields is not None:
+            grp.attrs["fields"] = list(fields)
+        if name == "error":
+            strdt = h5py.string_dtype()
+            source = grp.create_dataset(
+                "source", (0,), maxshape=(None,), dtype=strdt, chunks=(64,), compression="gzip",
+            )
+            message = grp.create_dataset(
+                "message", (0,), maxshape=(None,), dtype=strdt, chunks=(64,), compression="gzip",
+            )
+            return {"n": 0, "kind": "error", "ts": ts, "source": source, "message": message}
+        k = len(values)
+        vals = grp.create_dataset(
+            "values", (0, k), maxshape=(None, k), dtype="float32", chunks=(256, k),
+            compression="gzip",
+        )
+        return {"n": 0, "kind": "num", "ts": ts, "values": vals, "k": k}
 
     def close(self) -> None:
         if self._writer is not None:

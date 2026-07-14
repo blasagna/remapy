@@ -151,6 +151,26 @@ altitude  altitude_m=74.41
 battery   voltage_v=4.103  percent=90.27  usb_connected=1
 ```
 
+## Host library & app integration
+
+[`stream.py`](stream.py) exposes `FeatherSenseStream` for consuming the stream from an
+existing loop without blocking on serial I/O:
+
+- `poll()` returns the `SensorRecord`s (SI-converted, `error` records carry the source
+  *name*) that arrived since the last call — pump it once per iteration.
+- `FeatherSenseStream.open_if_available(port=None)` probes for a real frame and returns the
+  stream, or `None` when the device is absent — so callers run with or without the board.
+
+The **rerun viewer** and **HDF5 recorder** apps use it (both default to auto-detect; flags
+`--feather` / `--no-feather` / `--feather-port`):
+
+```bash
+pixi run rerun   --feather        # camera + pose + a "Feather Sense" plots tab
+pixi run record  --feather -o session.h5   # sensor streams saved under /feather/<name>
+```
+
+Recorded data reads back via `recording.reader.Recording.feather` (a `{stream: arrays}` dict).
+
 ## Notes / gotchas
 
 - CircuitPython's `struct` module exposes only the `pack`/`unpack` **functions**,

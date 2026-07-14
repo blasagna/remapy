@@ -22,37 +22,11 @@ import sys
 import time
 
 import serial
-from serial.tools import list_ports
 
-# Import the shared protocol module living next to this script.
+# Import the shared modules living next to this script.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import feather_protocol as fp  # noqa: E402
-
-
-def autodetect_port():
-    """Return the most likely CircuitPython serial port, or None."""
-    candidates = list(list_ports.comports())
-    # Prefer an Adafruit / CircuitPython VID:PID or a description match.
-    for port in candidates:
-        desc = "%s %s" % (port.description or "", port.manufacturer or "")
-        if "adafruit" in desc.lower() or "circuitpython" in desc.lower():
-            return port.device
-    # Fall back to the usual USB-CDC device nodes.
-    for port in candidates:
-        if "ttyACM" in port.device or "usbmodem" in port.device:
-            return port.device
-    return candidates[0].device if candidates else None
-
-
-def to_si(msg_type, values):
-    """Transform the raw int32 wire values into SI-unit floats.
-
-    Uses the shared scale table (SI = raw / scale). Fields without a scale
-    (e.g. the battery usb flag) are passed through unchanged. This is where the
-    fixed-point integers coming off the serial link become physical units.
-    """
-    scales = fp.SCALES.get(msg_type, ())
-    return [val / scales[i] if i < len(scales) else val for i, val in enumerate(values)]
+from stream import autodetect_port, to_si  # noqa: E402
 
 
 def format_record(msg_type, timestamp_ms, values):

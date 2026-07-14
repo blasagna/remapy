@@ -37,7 +37,26 @@ _BONE_COLOR = (0, 255, 0)
 LAYOUTS = ("split", "tabs")
 
 
-def _build_blueprint(layout: str) -> rrb.Blueprint:
+# Feather Sense time-series views (added to the blueprint only when the device is
+# present). 3-axis streams share one plot (child x/y/z lines); scalar streams get
+# their own so differing magnitudes don't crush each other onto a shared axis.
+def _feather_grid() -> rrb.Grid:
+    return rrb.Grid(
+        rrb.TimeSeriesView(origin="feather/accel", name="accel (m/s²)"),
+        rrb.TimeSeriesView(origin="feather/linear_accel", name="linear accel (m/s²)"),
+        rrb.TimeSeriesView(origin="feather/gravity", name="gravity (m/s²)"),
+        rrb.TimeSeriesView(origin="feather/gyro", name="gyro (rad/s)"),
+        rrb.TimeSeriesView(origin="feather/mag", name="mag (µT)"),
+        rrb.TimeSeriesView(origin="feather/env/temperature_c", name="temperature (°C)"),
+        rrb.TimeSeriesView(origin="feather/env/humidity_pct", name="humidity (%RH)"),
+        rrb.TimeSeriesView(origin="feather/env/pressure_hpa", name="pressure (hPa)"),
+        rrb.TimeSeriesView(origin="feather/altitude", name="altitude (m)"),
+        rrb.TimeSeriesView(origin="feather/battery/voltage_v", name="battery (V)"),
+        name="Feather Sense",
+    )
+
+
+def _build_blueprint(layout: str, feather: bool = False) -> rrb.Blueprint:
     camera_view = rrb.Spatial2DView(origin="video/image", name="Camera + pose")
     # One plot per joint so angles aren't overlaid on a shared axis.
     plots = rrb.Grid(
@@ -47,9 +66,15 @@ def _build_blueprint(layout: str) -> rrb.Blueprint:
         )
     )
     if layout == "tabs":
-        root = rrb.Tabs(camera_view, plots, name="View")
+        views = [camera_view, plots]
+        if feather:
+            views.append(_feather_grid())
+        root = rrb.Tabs(*views, name="View")
     else:
-        root = rrb.Horizontal(camera_view, plots, column_shares=[1, 1])
+        main = rrb.Horizontal(camera_view, plots, column_shares=[1, 1], name="Camera + angles")
+        # Keep the camera/angles split; put the sensor plots on a second tab so
+        # they don't crowd the video.
+        root = rrb.Tabs(main, _feather_grid()) if feather else main
     return rrb.Blueprint(root, collapse_panels=True)
 
 
@@ -73,8 +98,12 @@ class PoseRerunLogger:
         memory_limit: str = "75%",
         jpeg_quality: int = 75,
         layout: str = "split",
+        feather: bool = False,
     ) -> None:
         self._jpeg_quality = int(jpeg_quality)
+        # Offset mapping the device's monotonic ms clock onto the session time
+        # axis, fixed on the first sensor sample so inter-sample timing is kept.
+        self._sensor_offset: float | None = None
         rr.init(application_id)
         # Saving and spawning are mutually exclusive sinks; spawn explicitly so we
         # can pass the viewer's in-memory store limit.
@@ -85,7 +114,9 @@ class PoseRerunLogger:
         # make_active overrides whatever blueprint the viewer last had active for
         # this application_id (e.g. one the user rearranged by hand in an earlier
         # run) so the chosen --layout always takes effect.
-        rr.send_blueprint(_build_blueprint(layout), make_active=True, make_default=True)
+        rr.send_blueprint(
+            _build_blueprint(layout, feather=feather), make_active=True, make_default=True
+        )
 
     def log_frame(
         self,
@@ -118,6 +149,29 @@ class PoseRerunLogger:
         self._log_skeleton_2d(frame_bgr.shape, result.pose_landmarks[0])
         # self._log_skeleton_3d(result.pose_world_landmarks[0])
         self._log_angles(result.pose_world_landmarks[0])
+
+    def log_sensors(self, records, elapsed_s: float) -> None:
+        """Log a batch of Feather Sense SensorRecords as time series.
+
+        Each record is placed on the shared ``time`` timeline using its own
+        device timestamp (mapped onto session time via a one-time offset), so the
+        plots keep the sensors' true relative timing and line up with the video.
+        3-axis streams log child ``x/y/z`` scalars under ``feather/<name>``;
+        scalar streams log under their own leaf; errors go to a text log.
+        """
+        for rec in records:
+            if self._sensor_offset is None:
+                self._sensor_offset = elapsed_s - rec.timestamp_ms / 1000.0
+            rr.set_time(TIME_TIMELINE, duration=rec.timestamp_ms / 1000.0 + self._sensor_offset)
+
+            if rec.name == "error":
+                source, message = rec.values
+                rr.log("feather/error", rr.TextLog(f"{source}: {message}", level="WARN"))
+                continue
+
+            for i, value in enumerate(rec.values):
+                field = rec.fields[i] if i < len(rec.fields) else f"v{i}"
+                rr.log(f"feather/{rec.name}/{field}", rr.Scalars(float(value)))
 
     def _log_skeleton_2d(self, shape, landmarks) -> None:
         h, w = shape[:2]

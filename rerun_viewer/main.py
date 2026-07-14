@@ -17,6 +17,7 @@ Press Ctrl+C in the terminal to quit.
 import argparse
 import time
 
+from adafruit_feather_sense.stream import FeatherSenseStream
 from face_blur.factory import BLUR_METHODS, build_blurrer
 from pose_estimation.estimator import PoseEstimator
 from recording.recorder import HDF5Recorder
@@ -97,6 +98,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--record-video", default=None, help="With --record, also write a parallel mp4 to this path."
     )
+    parser.add_argument(
+        "--feather",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Also visualize/record Feather Sense sensor data over USB serial. "
+        "Default: auto (use it if the device is detected). --feather requires it "
+        "(error if absent); --no-feather disables the probe.",
+    )
+    parser.add_argument(
+        "--feather-port",
+        default=None,
+        help="Serial port of the Feather Sense (default: auto-detect).",
+    )
     return parser.parse_args(argv)
 
 
@@ -115,6 +129,17 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     recorder = None
+    feather = None
+    if args.feather is not False:  # None (auto) or True (required)
+        feather = FeatherSenseStream.open_if_available(args.feather_port)
+        if feather is None and args.feather is True:
+            print("Error: Feather Sense requested (--feather) but not detected.")
+            return 1
+        print(
+            f"Feather Sense detected on {feather.port}; streaming sensor data."
+            if feather is not None
+            else "Feather Sense not detected; continuing without sensor data."
+        )
     try:
         logger = PoseRerunLogger(
             spawn=not args.no_spawn,
@@ -122,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             memory_limit=args.memory_limit,
             jpeg_quality=args.jpeg_quality,
             layout=args.layout,
+            feather=feather is not None,
         )
         with VideoCapture(source, width=args.width, height=args.height) as cap, \
                 PoseEstimator(model_path=args.model) as pose:
@@ -161,6 +187,17 @@ def main(argv: list[str] | None = None) -> int:
                 if recorder is not None:
                     recorder.append(frame, timestamp_ms, result)
 
+                # Drain any Feather Sense samples that arrived since the last frame.
+                if feather is not None:
+                    records = feather.poll()
+                    if records:
+                        logger.log_sensors(records, now - start)
+                        if recorder is not None:
+                            for rec in records:
+                                recorder.append_sensor(
+                                    rec.name, rec.timestamp_ms, rec.values, rec.fields
+                                )
+
                 if args.max_frames is not None and count >= args.max_frames:
                     break
             print(f"Processed {count} frame(s).")
@@ -174,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
             recorder.close()
         if blurrer is not None:
             blurrer.close()
+        if feather is not None:
+            feather.close()
 
     return 0
 

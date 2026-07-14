@@ -145,3 +145,30 @@ class FakeVideoWriter:
 def solid_frame(h=48, w=64, value=200):
     """A uniform BGR frame; a distinctive value makes redaction easy to detect."""
     return np.full((h, w, 3), value, dtype=np.uint8)
+
+
+class FakeSerial:
+    """Stand-in for a pyserial ``Serial`` handle feeding pre-baked bytes.
+
+    Duck-types the little that :class:`adafruit_feather_sense.stream.FeatherSenseStream`
+    uses: ``in_waiting``, ``read(n)``, ``close()``, ``port``. ``chunk`` caps how
+    many bytes each ``read`` yields so tests can exercise cross-read buffering.
+    """
+
+    def __init__(self, blob=b"", chunk=8, port="FAKE"):
+        self._blob = bytes(blob)
+        self._chunk = chunk
+        self.port = port
+        self.closed = False
+
+    @property
+    def in_waiting(self):
+        return min(self._chunk, len(self._blob))
+
+    def read(self, n=1):
+        n = n or 1
+        out, self._blob = self._blob[:n], self._blob[n:]
+        return out
+
+    def close(self):
+        self.closed = True

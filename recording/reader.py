@@ -34,6 +34,9 @@ class Recording:
         # Read-only snapshot of any annotations (see recording.annotations); empty
         # on recordings that predate the feature. Written via AnnotationStore, not here.
         self.annotations: list[Annotation] = self._load_annotations()
+        # Per-stream Feather Sense sensor data if the device was recorded; empty
+        # dict otherwise. See recording.recorder.HDF5Recorder.append_sensor.
+        self.feather: dict[str, SimpleNamespace] = self._load_feather()
 
     def _load_annotations(self) -> list[Annotation]:
         if LABEL_DS not in self._f:
@@ -47,6 +50,32 @@ class Recording:
             for i, (lbl, s, e, d) in enumerate(zip(labels, starts, ends, deleted))
             if not bool(d)
         ]
+
+    def _load_feather(self) -> dict:
+        """Load each ``/feather/<stream>`` group into a namespace of arrays.
+
+        Numeric streams expose ``timestamps_ms``, ``values`` (M, K) and
+        ``fields``; the ``error`` stream exposes ``timestamps_ms``, ``source``
+        and ``message`` string arrays. Empty dict when no device was recorded.
+        """
+        if "feather" not in self._f:
+            return {}
+        out: dict[str, SimpleNamespace] = {}
+        grp = self._f["feather"]
+        for name in grp:
+            g = grp[name]
+            fields = [
+                s.decode() if isinstance(s, bytes) else str(s)
+                for s in g.attrs.get("fields", [])
+            ]
+            ns = SimpleNamespace(timestamps_ms=g["timestamps_ms"][:], fields=fields)
+            if name == "error":
+                ns.source = np.array([_decode(s) for s in g["source"][:]])
+                ns.message = np.array([_decode(s) for s in g["message"][:]])
+            else:
+                ns.values = g["values"][:]
+            out[name] = ns
+        return out
 
     def __len__(self) -> int:
         return int(self.timestamps_ms.shape[0])
