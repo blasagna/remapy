@@ -28,8 +28,10 @@ pandas = ">=3.0.3,<4"
 jupyter = ">=1.1.1,<2"
 h5py = ">=3.16.0,<4"
 opencv = ">=5.0.0,<6"
+pyserial = ">=3.5,<4"
 
 [pypi-dependencies]
 mediapipe = ">=0.10.35, <0.11"
 rerun-sdk = ">=0.20"
 adafruit-nrfutil = ">=0.5.3.post16, <0.6"
+circup = ">=3.0.4, <4"
