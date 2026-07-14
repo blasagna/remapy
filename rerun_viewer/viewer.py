@@ -5,7 +5,14 @@ Rerun viewer:
 
 - the video frame (``video/image``) with the 2D skeleton overlaid,
 - a 3D skeleton reconstructed from the metric *world* landmarks (``pose3d``),
-- scalar time series (line plots) for frame rate and joint angles (``metrics/*``).
+- scalar time series (line plots), one per joint angle (``metrics/angles/*``);
+  frame rate (``metrics/fps``) is also logged but left out of the blueprint's
+  plots to avoid crowding the view.
+
+A blueprint (see ``_build_blueprint``) arranges the camera/pose view and a grid of
+per-joint line plots either side by side (``layout="split"``, the default, each
+taking half the screen) or on separate tabs (``layout="tabs"``), instead of
+relying on the viewer's default auto-layout.
 
 Uses the rerun-sdk API (NOT the unrelated ``rerun`` file-watcher package).
 """
@@ -13,8 +20,9 @@ Uses the rerun-sdk API (NOT the unrelated ``rerun`` file-watcher package).
 import cv2
 import numpy as np
 import rerun as rr
+import rerun.blueprint as rrb
 
-from pose_estimation.angles import joint_angles
+from pose_estimation.angles import JOINT_TRIPLETS, joint_angles
 from pose_estimation.estimator import POSE_CONNECTIONS
 
 # Timeline names shown on the Rerun time axis.
@@ -23,6 +31,26 @@ TIME_TIMELINE = "time"
 
 _POINT_COLOR = (0, 200, 255)
 _BONE_COLOR = (0, 255, 0)
+
+# --layout choices for PoseRerunLogger: "split" puts the camera/pose view and the
+# line plots side by side (each half the screen); "tabs" puts them in separate tabs.
+LAYOUTS = ("split", "tabs")
+
+
+def _build_blueprint(layout: str) -> rrb.Blueprint:
+    camera_view = rrb.Spatial2DView(origin="video/image", name="Camera + pose")
+    # One plot per joint so angles aren't overlaid on a shared axis.
+    plots = rrb.Grid(
+        *(
+            rrb.TimeSeriesView(origin=f"metrics/angles/{name}", name=name)
+            for name in JOINT_TRIPLETS
+        )
+    )
+    if layout == "tabs":
+        root = rrb.Tabs(camera_view, plots, name="View")
+    else:
+        root = rrb.Horizontal(camera_view, plots, column_shares=[1, 1])
+    return rrb.Blueprint(root, collapse_panels=True)
 
 
 def _world_xyz(landmarks) -> np.ndarray:
@@ -44,6 +72,7 @@ class PoseRerunLogger:
         save_path: str | None = None,
         memory_limit: str = "75%",
         jpeg_quality: int = 75,
+        layout: str = "split",
     ) -> None:
         self._jpeg_quality = int(jpeg_quality)
         rr.init(application_id)
@@ -53,6 +82,10 @@ class PoseRerunLogger:
             rr.save(save_path)
         elif spawn:
             rr.spawn(memory_limit=memory_limit)
+        # make_active overrides whatever blueprint the viewer last had active for
+        # this application_id (e.g. one the user rearranged by hand in an earlier
+        # run) so the chosen --layout always takes effect.
+        rr.send_blueprint(_build_blueprint(layout), make_active=True, make_default=True)
 
     def log_frame(
         self,

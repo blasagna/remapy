@@ -22,7 +22,7 @@ from pose_estimation.estimator import PoseEstimator
 from recording.recorder import HDF5Recorder
 from video_capture.capture import CaptureError, VideoCapture
 
-from .viewer import PoseRerunLogger
+from .viewer import LAYOUTS, PoseRerunLogger
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -62,6 +62,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=75,
         help="JPEG quality (1-100) for the logged video frames. Default: 75.",
+    )
+    parser.add_argument(
+        "--layout",
+        choices=LAYOUTS,
+        default="split",
+        help="split (default) = camera/pose and line plots side by side, each "
+        "half the screen; tabs = camera/pose and line plots on separate tabs.",
     )
     parser.add_argument(
         "--blur-faces",
@@ -114,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             save_path=args.save,
             memory_limit=args.memory_limit,
             jpeg_quality=args.jpeg_quality,
+            layout=args.layout,
         )
         with VideoCapture(source, width=args.width, height=args.height) as cap, \
                 PoseEstimator(model_path=args.model) as pose:
