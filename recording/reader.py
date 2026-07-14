@@ -12,6 +12,8 @@ import cv2
 import h5py
 import numpy as np
 
+from .annotations import DELETED_DS, END_DS, LABEL_DS, START_DS, Annotation, _decode
+
 
 class Recording:
     """Open a recording ``.h5`` read-only; use as a context manager or call ``close()``."""
@@ -29,6 +31,22 @@ class Recording:
         ]
         self.pose_connections = self._f["meta/pose_connections"][:]
         self.metadata = {k: self._f.attrs[k] for k in self._f.attrs}
+        # Read-only snapshot of any annotations (see recording.annotations); empty
+        # on recordings that predate the feature. Written via AnnotationStore, not here.
+        self.annotations: list[Annotation] = self._load_annotations()
+
+    def _load_annotations(self) -> list[Annotation]:
+        if LABEL_DS not in self._f:
+            return []
+        labels = self._f[LABEL_DS][:]
+        starts = self._f[START_DS][:]
+        ends = self._f[END_DS][:]
+        deleted = self._f[DELETED_DS][:]
+        return [
+            Annotation(i, _decode(lbl), int(s), int(e))
+            for i, (lbl, s, e, d) in enumerate(zip(labels, starts, ends, deleted))
+            if not bool(d)
+        ]
 
     def __len__(self) -> int:
         return int(self.timestamps_ms.shape[0])

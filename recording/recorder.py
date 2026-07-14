@@ -19,6 +19,9 @@ Layout::
     /pose/landmarks_world (N, 33, 3)   float32
     /pose/visibility      (N, 33)      float32
     /pose/presence        (N, 33)      float32
+
+An optional ``/annotations`` group (labeled time segments) may be added *after*
+recording by ``recording.annotations.AnnotationStore``; it is absent here.
 """
 
 from datetime import datetime, timezone

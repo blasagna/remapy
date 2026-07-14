@@ -126,12 +126,35 @@ Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are re
   mediapipe version, blur style, coordinate conventions) is written as attrs. Optional
   `video_path` also writes a parallel `mp4v` file.
 - `reader.py` — `Recording`, a read-only loader exposing arrays (`landmarks_world`, etc.),
-  `pose_present`, `fps()`, `frame(i)` (JPEG-decoded), and `angles()` (recomputed via
-  `pose_estimation.angles.joint_angles`, returned as a pandas DataFrame).
+  `pose_present`, `fps()`, `frame(i)` (JPEG-decoded), `angles()` (recomputed via
+  `pose_estimation.angles.joint_angles`, returned as a pandas DataFrame), and `annotations` (a
+  read-only snapshot of any labeled time segments, `[]` on recordings without them).
+- `annotations.py` — `AnnotationStore`, a context manager that opens an **existing** recording
+  `"r+"` to add/edit labeled **time segments** (an interval table, not per-frame). `add(label,
+  start_ms, end_ms)`, `list()`, `delete(index)`; the optional `/annotations/{label,start_ms,
+  end_ms,deleted}` group is created lazily on first `add` (absent on older recordings). Deletes
+  are **tombstones** (a `deleted` flag), so row indices stay stable; writes flush immediately.
+  Overlapping/concurrent labels are supported since each segment is its own row. Written by the
+  `annotate/` tool; read back read-only via `Recording.annotations`.
 - `export.py` — `export_mp4()` / `python -m recording.export session.h5 out.mp4` reconstructs an
   mp4 (mp4v) from the stored JPEG frames; fps defaults to the median of recorded timestamps.
 - `main.py` — standalone CLI (`python -m recording.main`); same capture/pose/blur flags as the
   other CLIs plus `--output` and `--video`.
+
+### `annotate/`
+
+Post-hoc labeling tool: scrub an already-recorded `.h5` in an OpenCV window and attach text
+labels to time segments (stored via `recording.annotations.AnnotationStore`).
+
+- `main.py` — CLI (`python -m annotate.main session.h5` / `pixi run annotate session.h5`).
+  Displays `Recording.frame(i)` (already face-blurred) with a bottom timeline strip showing the
+  playhead and existing segments as colored, lane-stacked spans. Keys: `,`/`.` step a frame,
+  `<`/`>` jump ~1s, `space` play/pause, `i`/`o` mark in/out (then type a label at the terminal
+  prompt), `x` delete the nearest segment, `?` help, `q`/`Esc` quit. Edits save immediately.
+- **HDF5 locking note:** the tool holds two handles on the same file — `AnnotationStore` (`"r+"`)
+  and `Recording` (`"r"`). h5py requires the **`"r+"` handle be opened first**; opening `"r"`
+  before `"r+"` on one path in one process raises `OSError`. `main()` opens the store before the
+  reader for exactly this reason (pinned by `test_rw_then_ro_handle_coexist`).
 
 ### `list_devices/`
 
@@ -175,6 +198,7 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run record` — record webcam + pose to `recording.hdf5` for offline analysis.
 - `pixi run record-headless` — record 30 frames to `recording.hdf5` (bounded run).
 - `pixi run export-video <in.hdf5> <out.mp4> [--fps N]` — rebuild an mp4 from a recording's stored frames.
+- `pixi run annotate <session.hdf5>` — scrub a recording and label time segments (edits saved in place).
 - `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
