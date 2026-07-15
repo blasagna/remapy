@@ -89,19 +89,38 @@ sustained (non-transient) linear acceleration slowly bleeds into the gravity
 estimate; a gyro-fused orientation filter (e.g. Madgwick/Mahony) would remove
 that at more compute cost — a possible future improvement.
 
+## Transports
+
+The same COBS-framed TLV protocol runs over two interchangeable transports:
+
+- **USB serial** (default) — frames written to `sys.stdout.buffer`; host reads with `pyserial`.
+- **BLE** — frames written to the **Nordic UART Service**; host reads with `bleak`. Lower
+  bandwidth (~1–2 KB/s), so the board build samples the IMU slower.
+
+The sampling loop (`telemetry.py`) is transport-agnostic; each board build is a thin `code.py`
+that only supplies the emit sink. On the host, both transports expose the **same stream
+interface** (`poll()` / `errors` / `close()` / `.port` / `open_if_available`), so the apps select
+one with `--feather-transport {serial,ble}` and nothing else changes.
+
 ## Files
 
 | File | Runs on | Purpose |
 |------|---------|---------|
 | [`feather_protocol.py`](feather_protocol.py) | board **+** host | TLV encode/decode, COBS, `FrameDecoder` |
 | [`sensors.py`](sensors.py) | board | `SensorHub` — inits all sensors, one read method per stream |
-| [`code.py`](code.py) | board | entry point: per-stream rate scheduler → COBS frames over USB serial |
-| [`read_stream.py`](read_stream.py) | host | `pyserial` reader: decode, int→SI transform (`to_si`), pretty-print / `--stats` / `--raw` |
+| [`telemetry.py`](telemetry.py) | board | `Telemetry.pump(now, emit)` — the shared sample/schedule/encode loop (rates configurable) |
+| [`board/serial/code.py`](board/serial/code.py) | board | USB serial entry: `emit = sys.stdout.buffer.write`, full rates |
+| [`board/ble/code.py`](board/ble/code.py) | board | BLE entry: Nordic UART peripheral (`FeatherSense`), `emit = uart.write`, reduced rates |
+| [`stream.py`](stream.py) | host | serial `FeatherSenseStream` + shared `FrameRecordDecoder` (bytes→SI records) |
+| [`ble_stream.py`](ble_stream.py) | host | BLE `FeatherSenseBLEStream` (bleak on a background thread; same interface) |
+| [`read_stream.py`](read_stream.py) | host | serial reader CLI: decode, int→SI (`to_si`), pretty-print / `--stats` / `--raw` |
+| [`read_ble.py`](read_ble.py) | host | BLE reader CLI (bleak): `--address` / `--name` / `--stats` / `--only` |
+| [`__init__.py`](__init__.py) | host | `open_feather(transport, ...)` — transport-selecting factory used by the apps |
 
-Default sample rates (in `code.py`): accel 50 Hz (emits `accel` + `gravity` +
-`linear_accel` together), gyro 50 Hz, mag 20 Hz, env 1 Hz, altitude 1 Hz,
-battery 0.2 Hz. (Observed throughput is a bit lower — ~32/32/13 Hz — because the
-streams share one loop; adjust intervals there.)
+Default sample rates (`telemetry.py`): serial build — accel 50 Hz (emits `accel` + `gravity` +
+`linear_accel` together), gyro 50 Hz, mag 20 Hz, env/altitude 1 Hz, battery 0.2 Hz; BLE build
+halves/quarters the IMU (`imu_hz=20, mag_hz=10`) to fit the link. (Observed serial throughput is a
+bit lower than nominal because the streams share one loop; tune via the `Telemetry(...)` args.)
 
 ## Deploy
 
@@ -123,14 +142,23 @@ adafruit_lsm6ds==4.6.3
 adafruit_register==1.11.3
 ```
 
-Then copy the three device files to the CIRCUITPY drive root (the board
-auto-reloads and starts streaming):
+Then copy the shared modules plus the **chosen transport's** `code.py` to the CIRCUITPY drive
+root (the board auto-reloads and starts streaming):
 
 ```bash
-cp feather_protocol.py sensors.py code.py /media/bob/CIRCUITPY/ && sync
+# USB serial build (default)
+cp feather_protocol.py sensors.py telemetry.py board/serial/code.py /media/bob/CIRCUITPY/ && sync
+
+# BLE build — install the BLE library once, then deploy the ble entry
+pixi run circup install adafruit_ble
+cp feather_protocol.py sensors.py telemetry.py board/ble/code.py /media/bob/CIRCUITPY/ && sync
 ```
 
+Only one `code.py` runs at a time; swap builds by re-copying the other transport's `code.py`.
+
 ## Read the stream (host)
+
+USB serial (`pyserial`):
 
 ```bash
 pixi run python adafruit_feather_sense/read_stream.py            # auto-detect port, decode
@@ -138,6 +166,14 @@ pixi run python adafruit_feather_sense/read_stream.py --stats    # per-stream ra
 pixi run python adafruit_feather_sense/read_stream.py --raw      # hexdump bytes (inspect framing)
 pixi run python adafruit_feather_sense/read_stream.py --only accel,battery
 pixi run python adafruit_feather_sense/read_stream.py --port /dev/ttyACM0
+```
+
+BLE (`bleak`; PC Bluetooth on, board running the BLE build):
+
+```bash
+pixi run python adafruit_feather_sense/read_ble.py              # scan for "FeatherSense", decode
+pixi run python adafruit_feather_sense/read_ble.py --stats
+pixi run python adafruit_feather_sense/read_ble.py --address AA:BB:CC:DD:EE:FF
 ```
 
 Example decoded output (board at rest, on USB power):
@@ -153,23 +189,29 @@ battery   voltage_v=4.103  percent=90.27  usb_connected=1
 
 ## Host library & app integration
 
-[`stream.py`](stream.py) exposes `FeatherSenseStream` for consuming the stream from an
-existing loop without blocking on serial I/O:
+Both transports present the **same interface** for consuming the stream from an existing loop
+without blocking:
 
-- `poll()` returns the `SensorRecord`s (SI-converted, `error` records carry the source
-  *name*) that arrived since the last call — pump it once per iteration.
-- `FeatherSenseStream.open_if_available(port=None)` probes for a real frame and returns the
-  stream, or `None` when the device is absent — so callers run with or without the board.
+- `poll()` returns the `SensorRecord`s (SI-converted; `error` records carry the source *name*)
+  that arrived since the last call — pump it once per iteration.
+- `open_if_available(...)` probes for a real frame and returns the stream, or `None` when the
+  device is absent — so callers run with or without the board.
+- `FrameRecordDecoder` (in [`stream.py`](stream.py)) is the shared bytes→records decode used by
+  both `FeatherSenseStream` (serial) and `FeatherSenseBLEStream` (BLE).
 
-The **rerun viewer** and **HDF5 recorder** apps use it (both default to auto-detect; flags
-`--feather` / `--no-feather` / `--feather-port`):
+`open_feather(transport, *, port=None, address=None)` in [`__init__.py`](__init__.py) picks the
+backend (lazy-importing bleak/pyserial). The **rerun viewer** and **HDF5 recorder** apps use it —
+flags `--feather` / `--no-feather` / `--feather-transport {serial,ble}` / `--feather-port` (serial)
+/ `--feather-address` (BLE):
 
 ```bash
-pixi run rerun   --feather        # camera + pose + a "Feather Sense" plots tab
-pixi run record  --feather -o session.h5   # sensor streams saved under /feather/<name>
+pixi run rerun   --feather                         # camera + pose + a "Feather Sense" plots tab (serial)
+pixi run record  --feather -o session.h5           # sensor streams saved under /feather/<name> (serial)
+pixi run record  --feather --feather-transport ble -o session.h5   # same, over BLE
 ```
 
-Recorded data reads back via `recording.reader.Recording.feather` (a `{stream: arrays}` dict).
+Recorded data reads back via `recording.reader.Recording.feather` (a `{stream: arrays}` dict),
+identical regardless of transport.
 
 ## Notes / gotchas
 

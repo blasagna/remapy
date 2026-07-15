@@ -29,6 +29,7 @@ jupyter = ">=1.1.1,<2"
 h5py = ">=3.16.0,<4"
 opencv = ">=5.0.0,<6"
 pyserial = ">=3.5,<4"
+bleak = ">=3.0.2,<4"
 
 [pypi-dependencies]
 mediapipe = ">=0.10.35, <0.11"
