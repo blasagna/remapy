@@ -109,13 +109,15 @@ Streams the pipeline to the [Rerun](https://rerun.io) viewer.
   path only — a no-op under `--save`), `--jpeg-quality` (default `75`), and `--record PATH.h5`
   / `--record-video PATH.mp4` (write an HDF5 recording alongside — see `recording/`). Spawns
   the viewer by default.
-- **Feather Sense (optional):** when the board is streaming over USB serial, the viewer also
-  plots its sensors on a **"Feather Sense" tab** (accel/gyro/mag/gravity/linear_accel as x/y/z
-  line plots, plus env/altitude/battery). `--feather` requires the device (errors if absent),
-  `--no-feather` disables the probe, default is **auto** (used only if detected via
-  `FeatherSenseStream.open_if_available`); `--feather-port` overrides auto-detect. Samples are
-  drained non-blockingly each camera frame and placed on the shared `time` timeline using the
-  device clock. See `adafruit_feather_sense/`.
+- **Feather Sense (optional):** when the board is streaming (USB serial **or BLE**), the viewer
+  also plots its sensors on a **"Feather Sense" tab** (accel/gyro/mag/gravity/linear_accel as x/y/z
+  line plots, plus env/altitude/battery). The stream is obtained via
+  `adafruit_feather_sense.open_feather(...)`: `--feather` requires the device (errors if absent),
+  `--no-feather` disables the probe, default is **auto** (used only if detected);
+  `--feather-transport {serial,ble}` (default serial), `--feather-port` (serial) /
+  `--feather-address` (BLE) override detection. Samples are drained non-blockingly each camera
+  frame and placed on the shared `time` timeline using the device clock. See
+  `adafruit_feather_sense/`.
 
 ### `recording/`
 
@@ -135,8 +137,9 @@ Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are re
 - **Feather Sense (optional):** `append_sensor(name, timestamp_ms, values, fields)` writes each
   sensor stream to its own lazily-created `/feather/<name>` group (own `timestamps_ms` +
   `(M, K)` float32 `values`, or `source`/`message` strings for `error`), grown independently
-  since streams are async/multi-rate. `recording/main.py` gains the same `--feather` /
-  `--no-feather` / `--feather-port` flags as the rerun CLI. Read back via `Recording.feather`.
+  since streams are async/multi-rate. `recording/main.py` gains the same feather flags as the
+  rerun CLI (`--feather` / `--no-feather` / `--feather-transport {serial,ble}` / `--feather-port`
+  / `--feather-address`). Read back via `Recording.feather` (identical regardless of transport).
 - `reader.py` — `Recording`, a read-only loader exposing arrays (`landmarks_world`, etc.),
   `pose_present`, `fps()`, `frame(i)` (JPEG-decoded), `angles()` (recomputed via
   `pose_estimation.angles.joint_angles`, returned as a pandas DataFrame), `annotations` (a
@@ -191,27 +194,35 @@ defined exactly as `video_capture` uses it — a camera *index* that `cv2.VideoC
 ### `adafruit_feather_sense/`
 
 CircuitPython app for the **Adafruit Feather Bluefruit Sense (nRF52840)** that streams its
-onboard sensors over USB serial, plus host-side readers. Mixed runtime: some files run on the
-board, some on the host, one is shared. See `adafruit_feather_sense/README.md` for the full
-protocol spec, `circup` library list, and deploy steps.
+onboard sensors over **USB serial or BLE** (interchangeable transports, same wire protocol), plus
+host-side readers. Mixed runtime: some files run on the board, some on the host, one is shared.
+See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list, and deploy steps.
 
-- **On the board** (copied to the CIRCUITPY drive root; libs installed with `circup`):
-  `code.py` (per-sensor rate scheduler), `sensors.py` (`SensorHub` — IMU with LSM6DS33/TR-C
-  fallback, LIS3MDL, SHT31-D, BMP280, battery via `board.VOLTAGE_MONITOR`; `read_motion()`
-  decomposes accel into total/gravity/linear via a low-pass gravity estimate).
+- **On the board** (deploy = copy the shared trio + the chosen entry to the CIRCUITPY root as
+  `code.py`; libs via `circup`): `sensors.py` (`SensorHub` — IMU with LSM6DS33/TR-C fallback,
+  LIS3MDL, SHT31-D, BMP280, battery via `board.VOLTAGE_MONITOR`; `read_motion()` decomposes accel
+  into total/gravity/linear via a low-pass gravity estimate); `telemetry.py` (`Telemetry.pump(now,
+  emit)` — the transport-agnostic sample/schedule/encode loop, rates are ctor args); and **two
+  entry points, a literal `code.py` each**: `board/serial/code.py` (USB, `emit =
+  sys.stdout.buffer.write`, full rates) and `board/ble/code.py` (Nordic UART peripheral named
+  `FeatherSense` via `adafruit_ble` `UARTService`, `emit = uart.write`, reduced IMU rate for the
+  ~1–2 KB/s link).
 - **Shared** (board + host, pure `struct`): `feather_protocol.py` — a **TLV-over-COBS** wire
   protocol. Each sample is one COBS-framed record `[type][len][timestamp_u32][int32…]`
   terminated by `0x00`; **no floats on the wire** — values are scaled fixed-point int32 (shared
   `SCALES`), converted SI↔int by `to_raw`/`to_si`. Message types include accel/gyro/mag/env/
   altitude/battery/gravity/linear_accel and an `error` type (streamed on any caught
   sampling/encode failure).
-- **On the host:** `read_stream.py` (standalone pretty-printer CLI) and `stream.py` —
-  `FeatherSenseStream`, a non-blocking reader pumped from an existing loop: `poll()` returns
-  SI-converted `SensorRecord`s; `open_if_available(port)` probes for a real frame and returns
-  `None` when the device is absent (so callers run with or without it). Consumed by
-  `rerun_viewer` and `recording` (see their sections). Import note: `stream.py`/`read_stream.py`
-  add the package dir to `sys.path` so the shared `feather_protocol` resolves as a top-level
-  module on either runtime; don't import the board files (`code.py`/`sensors.py`) on the host.
+- **On the host** — both transports share one interface (`poll()` → SI `SensorRecord`s, `errors`,
+  `close()`, `.port`, `open_if_available`), so apps are transport-agnostic. `stream.py` —
+  `FeatherSenseStream` (pyserial, non-blocking) + `FrameRecordDecoder` (the shared bytes→records
+  decode). `ble_stream.py` — `FeatherSenseBLEStream` (**bleak**; scan/connect/notify on the Nordic
+  UART Service run on a background asyncio thread, a queue bridges to the sync `poll()`).
+  `read_stream.py` / `read_ble.py` are the standalone pretty-printer CLIs. `__init__.py` exposes
+  `open_feather(transport, *, port=None, address=None)` (lazy-imports the backend) — used by
+  `rerun_viewer`/`recording`. Import note: host modules add the package dir to `sys.path` so the
+  shared `feather_protocol` resolves as a top-level module; **don't import the board files**
+  (`board/*/code.py`, `sensors.py`, `telemetry.py`) on the host.
 
 ## Environment & commands
 
@@ -252,9 +263,10 @@ display, or GPU and runs in well under a second:
   opened `cv2.VideoCapture` (`FakeCapture`), `cv2.VideoWriter` (`FakeVideoWriter`), and a
   pyserial handle (`FakeSerial`, fed pre-baked protocol bytes).
 - `tests/test_feather.py` — the Feather Sense host integration: `FeatherSenseStream` decode/poll
-  and `open_if_available` probe (via `FakeSerial`), the recorder's `/feather` datasets +
-  `Recording.feather`, and the viewer's `log_sensors` (with `rr` mocked). No board/serial port
-  needed.
+  and `open_if_available` probe (via `FakeSerial`), the shared `FrameRecordDecoder`, the
+  `open_feather` transport dispatch (serial/ble backends mocked — no real radio), the recorder's
+  `/feather` datasets + `Recording.feather`, and the viewer's `log_sensors` (with `rr` mocked). No
+  board, serial port, or BLE adapter needed.
 - `cv2.VideoCapture`/`VideoWriter` are patched; the native MediaPipe `PoseLandmarker`/
   `FaceDetector` are patched at their import site (`ensure_model` + the class) so no model loads;
   `urllib.request.urlretrieve` is patched in the `ensure_model` tests; the `rerun` SDK is patched

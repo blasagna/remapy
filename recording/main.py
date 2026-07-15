@@ -16,7 +16,7 @@ Press Ctrl+C to stop.
 import argparse
 import time
 
-from adafruit_feather_sense.stream import FeatherSenseStream
+from adafruit_feather_sense import open_feather
 from face_blur.factory import BLUR_METHODS, build_blurrer
 from pose_estimation.estimator import PoseEstimator
 from video_capture.capture import CaptureError, VideoCapture
@@ -75,14 +75,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--feather",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Also record Feather Sense sensor data over USB serial into the same "
-        ".h5 (under /feather). Default: auto (use it if detected). --feather "
-        "requires it (error if absent); --no-feather disables the probe.",
+        help="Also record Feather Sense sensor data (USB serial or BLE, see "
+        "--feather-transport) into the same .h5 (under /feather). Default: auto "
+        "(use it if detected); --feather requires it (error if absent); "
+        "--no-feather disables the probe.",
+    )
+    parser.add_argument(
+        "--feather-transport",
+        choices=["serial", "ble"],
+        default="serial",
+        help="How to reach the Feather Sense: serial (USB, default) or ble.",
     )
     parser.add_argument(
         "--feather-port",
         default=None,
-        help="Serial port of the Feather Sense (default: auto-detect).",
+        help="Serial port of the Feather Sense (serial transport; default: auto-detect).",
+    )
+    parser.add_argument(
+        "--feather-address",
+        default=None,
+        help="BLE address of the Feather Sense (ble transport; default: scan for the name).",
     )
     return parser.parse_args(argv)
 
@@ -103,12 +115,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     feather = None
     if args.feather is not False:  # None (auto) or True (required)
-        feather = FeatherSenseStream.open_if_available(args.feather_port)
+        feather = open_feather(
+            args.feather_transport, port=args.feather_port, address=args.feather_address
+        )
         if feather is None and args.feather is True:
             print("Error: Feather Sense requested (--feather) but not detected.")
             return 1
         print(
-            f"Feather Sense detected on {feather.port}; recording sensor data."
+            f"Feather Sense ({args.feather_transport}) detected on {feather.port}; recording sensor data."
             if feather is not None
             else "Feather Sense not detected; continuing without sensor data."
         )

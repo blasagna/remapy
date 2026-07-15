@@ -71,6 +71,25 @@ def _record(msg_type, timestamp_ms, values):
     return SensorRecord(name, msg_type, timestamp_ms, to_si(msg_type, values), fields)
 
 
+class FrameRecordDecoder:
+    """Turn raw transport bytes into SI-converted :class:`SensorRecord`s.
+
+    Wraps a :class:`feather_protocol.FrameDecoder` (COBS/TLV framing) and the
+    per-type SI conversion, so every transport — USB serial or BLE — shares one
+    decode path. ``feed(bytes) -> list[SensorRecord]``.
+    """
+
+    def __init__(self):
+        self._decoder = fp.FrameDecoder()
+
+    def feed(self, data):
+        return [_record(mt, ts, values) for mt, ts, values in self._decoder.feed(data)]
+
+    @property
+    def errors(self):
+        return self._decoder.errors
+
+
 class FeatherSenseStream:
     """Pump a Feather Sense serial stream from an existing loop.
 
@@ -89,7 +108,7 @@ class FeatherSenseStream:
                 raise RuntimeError("no serial port found for the Feather Sense")
             # timeout=0 -> reads never block; we drain in_waiting each poll.
             self._ser = serial.Serial(self.port, baud, timeout=0)
-        self._decoder = fp.FrameDecoder()
+        self._decoder = FrameRecordDecoder()
         self._pending = []  # records decoded during a probe, returned on first poll
 
     def poll(self):
@@ -102,8 +121,7 @@ class FeatherSenseStream:
         waiting = getattr(self._ser, "in_waiting", 0)
         data = self._ser.read(waiting) if waiting else self._ser.read()
         if data:
-            for msg_type, ts, values in self._decoder.feed(data):
-                out.append(_record(msg_type, ts, values))
+            out.extend(self._decoder.feed(data))
         return out
 
     @property

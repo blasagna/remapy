@@ -15,7 +15,8 @@ from unittest import mock
 import numpy as np
 
 # adafruit_feather_sense.stream inserts the dir holding feather_protocol on sys.path.
-from adafruit_feather_sense.stream import FeatherSenseStream, SensorRecord
+from adafruit_feather_sense import open_feather
+from adafruit_feather_sense.stream import FeatherSenseStream, FrameRecordDecoder, SensorRecord
 import feather_protocol as fp
 from recording.reader import Recording
 from recording.recorder import HDF5Recorder
@@ -116,6 +117,65 @@ class OpenIfAvailableTests(unittest.TestCase):
     def test_returns_none_when_no_port(self):
         with mock.patch("adafruit_feather_sense.stream.autodetect_port", return_value=None):
             self.assertIsNone(FeatherSenseStream.open_if_available(probe_timeout=0.1))
+
+
+class FrameRecordDecoderTests(unittest.TestCase):
+    """The transport-agnostic decode shared by the serial and BLE streams."""
+
+    def test_feed_yields_si_records(self):
+        dec = FrameRecordDecoder()
+        recs = dec.feed(_baked_stream())
+        self.assertEqual(
+            [r.name for r in recs],
+            ["accel", "gravity", "linear_accel", "env", "altitude", "battery", "error"],
+        )
+        by = {r.name: r for r in recs}
+        self.assertAlmostEqual(by["accel"].values[2], 9.81, places=2)
+        self.assertEqual(by["error"].values, ("mag", "boom"))  # source resolved to name
+        self.assertEqual(dec.errors, 0)
+
+    def test_feed_accepts_partial_chunks(self):
+        blob = _baked_stream()
+        whole = FrameRecordDecoder().feed(blob)
+        piecemeal, dec = [], FrameRecordDecoder()
+        for b in blob:
+            piecemeal.extend(dec.feed(bytes([b])))
+        self.assertEqual([r.name for r in piecemeal], [r.name for r in whole])
+
+
+class OpenFeatherDispatchTests(unittest.TestCase):
+    """The open_feather factory routes to the right backend (both mocked)."""
+
+    def test_serial_transport(self):
+        sentinel = object()
+        with mock.patch(
+            "adafruit_feather_sense.stream.FeatherSenseStream.open_if_available",
+            return_value=sentinel,
+        ) as m:
+            result = open_feather("serial", port="/dev/ttyACM0")
+        self.assertIs(result, sentinel)
+        m.assert_called_once_with("/dev/ttyACM0")
+
+    def test_ble_transport(self):
+        sentinel = object()
+        with mock.patch(
+            "adafruit_feather_sense.ble_stream.FeatherSenseBLEStream.open_if_available",
+            return_value=sentinel,
+        ) as m:
+            result = open_feather("ble", address="AA:BB:CC:DD:EE:FF")
+        self.assertIs(result, sentinel)
+        m.assert_called_once_with("AA:BB:CC:DD:EE:FF")
+
+    def test_none_passthrough(self):
+        with mock.patch(
+            "adafruit_feather_sense.stream.FeatherSenseStream.open_if_available",
+            return_value=None,
+        ):
+            self.assertIsNone(open_feather("serial"))
+
+    def test_unknown_transport_raises(self):
+        with self.assertRaises(ValueError):
+            open_feather("carrier-pigeon")
 
 
 class RecorderFeatherTests(unittest.TestCase):
