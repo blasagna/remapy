@@ -19,7 +19,9 @@ import time
 
 from sensors import SensorHub
 from status_led import StatusLED
-from telemetry import Telemetry
+from telemetry import Telemetry, _now_ms
+
+IMU_HZ = 100  # ~4.4 KB/s of frames; USB CDC is nowhere near a constraint
 
 
 def _emit(frame):
@@ -28,13 +30,16 @@ def _emit(frame):
 
 
 def main():
-    hub = SensorHub()
+    # One number drives both, and they must agree: the hub needs it to clock the
+    # sensor above the poll, the schedule needs it to pace the poll.
+    hub = SensorHub(imu_hz=IMU_HZ)
     led = StatusLED(hub)
     # The LED rides the battery slot's existing read rather than polling from
     # this loop: calling it per-iteration measured ~1 accel sample/s.
-    telemetry = Telemetry(hub=hub, on_battery=led.update)  # full USB rates (IMU 50 Hz)
+    telemetry = Telemetry(hub=hub, imu_hz=IMU_HZ, on_battery=led.update)
     while True:
-        delay = telemetry.pump(time.monotonic(), _emit)
+        next_due_ms = telemetry.pump(_now_ms(), _emit)
+        delay = (next_due_ms - _now_ms()) / 1000
         if delay > 0:
             time.sleep(delay)
 

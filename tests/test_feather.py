@@ -13,6 +13,8 @@ Both stay importable here because ``StatusLED`` defers its ``board``/``neopixel`
 imports into ``__init__``.
 """
 
+import importlib
+import random
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -25,8 +27,14 @@ import numpy as np
 from adafruit_feather_sense import open_feather
 from adafruit_feather_sense.motion import GravityFilter, derive_motion
 from adafruit_feather_sense.status_led import GREEN, RED, YELLOW, StatusLED, band_for
-from adafruit_feather_sense.stream import FeatherSenseStream, FrameRecordDecoder, SensorRecord
+from adafruit_feather_sense.stream import (
+    FeatherSenseStream,
+    FrameRecordDecoder,
+    RateTracker,
+    SensorRecord,
+)
 import feather_protocol as fp
+from telemetry import Telemetry  # board-side, but imports `sensors` lazily
 from recording.reader import Recording
 from recording.recorder import HDF5Recorder
 from tests.fakes import FakePixel, FakeSerial, pose_result, solid_frame
@@ -146,6 +154,307 @@ class FrameRecordDecoderTests(unittest.TestCase):
         for b in blob:
             piecemeal.extend(dec.feed(bytes([b])))
         self.assertEqual([r.name for r in piecemeal], [r.name for r in whole])
+
+
+def _cobs_encode_reference(data):
+    """The original per-byte COBS encoder, kept verbatim as a test oracle.
+
+    `fp.cobs_encode` was rewritten for speed on the board; "faster" is only
+    acceptable if it is also *identical*, and this is what identical means.
+    """
+    out = bytearray()
+    code_index = 0
+    out.append(0)
+    code = 1
+    for byte in data:
+        if byte != 0:
+            out.append(byte)
+            code += 1
+            if code == 0xFF:
+                out[code_index] = code
+                code_index = len(out)
+                out.append(0)
+                code = 1
+        else:
+            out[code_index] = code
+            code_index = len(out)
+            out.append(0)
+            code = 1
+    out[code_index] = code
+    return bytes(out)
+
+
+class CobsEncodeTests(unittest.TestCase):
+    """The split-based rewrite must match the byte loop it replaced, exactly."""
+
+    def _cases(self):
+        rng = random.Random(20260716)
+        cases = [b"", b"\x00", b"\x01", b"\x00\x00", b"\x01\x00\x02"]
+        # The block-split boundary: a 0xFF code means "254 non-zero bytes, no
+        # zero after". Unreachable for real frames, so only a test will ever
+        # exercise it.
+        for n in (253, 254, 255, 256, 507, 508, 509, 1000):
+            cases.append(b"\x01" * n)
+            cases.append(b"\x01" * n + b"\x00")
+            cases.append(b"\x00" + b"\x01" * n)
+        for _ in range(2000):
+            n = rng.randint(0, 600)
+            cases.append(bytes(rng.randint(0, 255) for _ in range(n)))
+        for _ in range(2000):  # zero-heavy, like a real fixed-point payload
+            n = rng.randint(0, 40)
+            cases.append(bytes(rng.choice([0, 0, 0, rng.randint(1, 255)]) for _ in range(n)))
+        return cases
+
+    def test_identical_to_the_reference_encoder(self):
+        for data in self._cases():
+            self.assertEqual(fp.cobs_encode(data), _cobs_encode_reference(data), data.hex())
+
+    def test_roundtrips_and_never_emits_a_zero(self):
+        for data in self._cases():
+            encoded = fp.cobs_encode(data)
+            self.assertNotIn(0, encoded, data.hex())
+            self.assertEqual(fp.cobs_decode(encoded), data, data.hex())
+
+    def test_matches_an_independent_implementation(self):
+        # The `cobs` PyPI package as a third-party oracle. It diverges from ours
+        # at a 254-byte zero-free run (a documented COBS variation), which real
+        # frames never reach -- max payload is ~207 bytes.
+        cobs = importlib.import_module("cobs.cobs")
+        rng = random.Random(7)
+        for _ in range(2000):
+            data = bytes(rng.randint(0, 255) for _ in range(rng.randint(0, 200)))
+            self.assertEqual(fp.cobs_encode(data), cobs.encode(data), data.hex())
+
+
+class EncodeXyzTests(unittest.TestCase):
+    """The fused encode must be byte-identical to to_raw + generic encode."""
+
+    def test_identical_to_the_generic_path(self):
+        rng = random.Random(1234)
+        for msg_type in (fp.MSG_ACCEL, fp.MSG_GYRO, fp.MSG_MAG):
+            scale = fp.SCALES[msg_type][0]
+            for _ in range(500):
+                xyz = tuple(rng.uniform(-200.0, 200.0) for _ in range(3))
+                ts = rng.randint(0, 2**32 - 1)
+                self.assertEqual(
+                    fp.encode_xyz(msg_type, ts, xyz, scale),
+                    fp.encode(msg_type, ts, fp.to_raw(msg_type, xyz)),
+                )
+
+    def test_decodes_back_to_the_input(self):
+        frame = fp.encode_xyz(fp.MSG_ACCEL, 1234, (0.5, -1.25, 9.81), 1000)
+        recs = FrameRecordDecoder().feed(frame)
+        self.assertEqual(recs[0].name, "accel")
+        self.assertEqual(recs[0].timestamp_ms, 1234)
+        self.assertAlmostEqual(recs[0].values[2], 9.81, places=3)
+
+    def test_timestamp_wraps_rather_than_overflowing_the_pack(self):
+        # ~49.7 days of uptime wraps the u32; it must not raise.
+        frame = fp.encode_xyz(fp.MSG_ACCEL, 2**32 + 5, (0.0, 0.0, 0.0), 1000)
+        self.assertEqual(FrameRecordDecoder().feed(frame)[0].timestamp_ms, 5)
+
+
+class _FakeHub:
+    """A SensorHub stand-in: constant readings, optionally failing one stream."""
+
+    def __init__(self, failing=None):
+        self.failing = failing
+        self.reads = {}
+
+    def _count(self, name):
+        self.reads[name] = self.reads.get(name, 0) + 1
+        if self.failing == name:
+            raise RuntimeError("boom")
+
+    def read_imu(self):
+        self._count("imu")
+        return (0.0, 0.0, 9.81), (0.0, 0.0, 0.0)
+
+    def read_mag(self):
+        self._count("mag")
+        return (0.0, 0.0, 0.0)
+
+    def read_battery(self):
+        self._count("battery")
+        return (4.0, 80.0, 1)
+
+
+class TelemetryScheduleTests(unittest.TestCase):
+    """The board's sampling schedule, driven by a fake clock and a fake hub.
+
+    Board-side code, but reachable on the host because `Telemetry` defers its
+    `sensors` import. This is the only coverage the sampling loop has.
+    """
+
+    def _run(self, telemetry, duration_ms, step_ms=1, lateness_ms=0, start_ms=0):
+        """Drive `pump` over a simulated span; return decoded frames by stream."""
+        frames = []
+        now = start_ms
+        end = start_ms + duration_ms
+        while now < end:
+            next_due = telemetry.pump(now + lateness_ms, frames.append)
+            now = max(next_due, now + step_ms)
+        dec = FrameRecordDecoder()
+        out = {}
+        for rec in dec.feed(b"".join(frames)):
+            out.setdefault(rec.name, []).append(rec)
+        return out
+
+    def test_hits_nominal_rate(self):
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=20)
+        got = self._run(tel, 1000)
+        # A slot fires at t=0 and every 10 ms after, so 1000 ms holds 100.
+        self.assertEqual(len(got["accel"]), 100)
+        self.assertEqual(len(got["gyro"]), 100)
+        self.assertEqual(len(got["mag"]), 20)
+
+    def test_sustained_lateness_does_not_erode_the_rate(self):
+        # The regression test for the original `due = now + interval`. Every slot
+        # is served 3 ms late, which that form baked into the next period (13 ms
+        # instead of 10) and so lost ~23 % of the rate outright. Advancing from
+        # the deadline absorbs the lateness instead of compounding it.
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=20)
+        got = self._run(tel, 1000, lateness_ms=3)
+        self.assertEqual(len(got["accel"]), 100)
+
+    def test_rate_holds_at_high_uptime(self):
+        # The float32 `time.monotonic()` decay this schedule exists to dodge:
+        # at ~5.6 h uptime the old float clock quantized to ~2 ms and the rate
+        # sagged to 43.5 Hz. Integer ms has no such term — a large start offset
+        # must change nothing.
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=20)
+        got = self._run(tel, 1000, start_ms=20_110_454)
+        self.assertEqual(len(got["accel"]), 100)
+
+    def test_a_long_stall_drops_the_backlog_instead_of_bursting(self):
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=20)
+        frames = []
+        tel.pump(0, frames.append)
+        frames.clear()
+        # Nothing ran for 500 ms (a BLE reconnect). Catching up honestly would
+        # mean 50 stale accel samples; the clamp emits one and resyncs.
+        tel.pump(500, frames.append)
+        got = {}
+        for rec in FrameRecordDecoder().feed(b"".join(frames)):
+            got.setdefault(rec.name, []).append(rec)
+        self.assertEqual(len(got["accel"]), 1)
+
+    def test_a_failing_sensor_emits_an_error_and_spares_the_others(self):
+        tel = Telemetry(hub=_FakeHub(failing="mag"), imu_hz=100, mag_hz=20)
+        got = self._run(tel, 1000)
+        self.assertNotIn("mag", got)
+        self.assertEqual(len(got["error"]), 20)  # one per attempted mag read
+        self.assertEqual(got["error"][0].values, ("mag", "boom"))
+        self.assertEqual(len(got["accel"]), 100)  # unaffected
+
+    def test_accel_and_gyro_share_one_timestamp(self):
+        # The point of the burst read: they are one sample, so they must not
+        # carry two different times.
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=20)
+        got = self._run(tel, 200)
+        pairs = list(zip(got["accel"], got["gyro"]))
+        self.assertTrue(pairs)
+        for accel, gyro in pairs:
+            self.assertEqual(accel.timestamp_ms, gyro.timestamp_ms)
+
+    def test_one_imu_read_serves_both_streams(self):
+        hub = _FakeHub()
+        tel = Telemetry(hub=hub, imu_hz=100, mag_hz=20)
+        got = self._run(tel, 1000)
+        self.assertEqual(len(got["accel"]), 100)
+        self.assertEqual(len(got["gyro"]), 100)
+        self.assertEqual(hub.reads["imu"], 100)  # not 200
+
+    def test_on_battery_fires_from_the_battery_slot(self):
+        seen = []
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, battery_hz=10, on_battery=seen.append)
+        self._run(tel, 1000)
+        self.assertEqual(len(seen), 10)
+        self.assertAlmostEqual(seen[0], 80.0)
+
+    def test_a_raising_on_battery_costs_only_its_own_frame(self):
+        # `on_battery` fires inside the battery reader, so an exception lands in
+        # pump's handler: the battery frame becomes an error frame. Everything
+        # else must be untouched.
+        def boom(_pct):
+            raise RuntimeError("led died")
+
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, battery_hz=10, on_battery=boom)
+        got = self._run(tel, 1000)
+        self.assertEqual(len(got["accel"]), 100)
+        self.assertNotIn("battery", got)
+        self.assertEqual(len(got["error"]), 10)
+
+    def test_zero_hz_disables_a_stream_without_dividing_by_zero(self):
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=0)
+        got = self._run(tel, 1000)
+        self.assertEqual(sorted(got), ["accel", "battery", "gyro"])
+        self.assertEqual(len(got["accel"]), 100)
+
+
+class RateTrackerTests(unittest.TestCase):
+    """The --stats accounting. This is the project's acceptance instrument, so a
+    bias here silently rewrites every measured number in the README."""
+
+    def _report(self, elapsed, add):
+        """Run one window of `add(tracker)` over a faked `elapsed` wall time."""
+        clock = [1000.0]
+        with mock.patch("adafruit_feather_sense.stream.time.monotonic", lambda: clock[0]):
+            tracker = RateTracker()
+            add(tracker)
+            clock[0] += elapsed
+            return tracker.report()
+
+    def test_host_rate_divides_by_true_elapsed_not_the_nominal_interval(self):
+        # The regression test for the original bug: 100 samples counted over a
+        # window that really ran 1.1 s is 90.9/s, not the "100/s" a raw count
+        # printed. The reader loop only ever overshoots 1.0 s (a blocking read
+        # overshoots by its own timeout), so the error was always in the
+        # flattering direction.
+        out = self._report(1.1, lambda t: [t.add("accel", i * 10) for i in range(100)])
+        self.assertIn("host=  90.9/s", out)
+        # ...and `dev` recovers the truth the host window obscured: the device
+        # timestamps are 10 ms apart, so the board really was at 100 Hz.
+        self.assertIn("dev= 100.0/s", out)
+
+    def test_device_rate_is_independent_of_host_timing(self):
+        # Same samples, same device clock, but the host took 2x as long to read
+        # them: `dev` must not move, because the board's spacing didn't.
+        fast = self._report(1.0, lambda t: [t.add("accel", i * 10) for i in range(101)])
+        slow = self._report(2.0, lambda t: [t.add("accel", i * 10) for i in range(101)])
+        self.assertIn("dev= 100.0/s", fast)
+        self.assertIn("dev= 100.0/s", slow)
+        self.assertIn("host= 101.0/s", fast)
+        self.assertIn("host=  50.5/s", slow)
+
+    def test_max_gap_exposes_a_stall_that_the_average_hides(self):
+        # 50 samples at 10 ms then one 500 ms stall: the mean rate still looks
+        # respectable, so the gap is the only thing that reveals the burst. This
+        # is the BLE "link saturated" signature.
+        def add(t):
+            for i in range(50):
+                t.add("accel", i * 10)
+            t.add("accel", 990)
+
+        out = self._report(1.0, add)
+        self.assertIn("gap max= 500.0 ms", out)
+
+    def test_window_resets_between_reports(self):
+        clock = [1000.0]
+        with mock.patch("adafruit_feather_sense.stream.time.monotonic", lambda: clock[0]):
+            tracker = RateTracker()
+            tracker.add("accel", 0)
+            clock[0] += 1.0
+            self.assertIn("accel", tracker.report())
+            self.assertFalse(tracker.due())  # clock restarted
+            clock[0] += 1.0
+            self.assertNotIn("accel", tracker.report())  # counts did not carry over
+
+    def test_single_sample_reports_host_rate_but_no_device_rate(self):
+        # One sample spans no interval, so a device rate would be a fabrication.
+        out = self._report(1.0, lambda t: t.add("accel", 5))
+        self.assertIn("n=   1", out)
+        self.assertNotIn("dev=", out)
 
 
 class OpenFeatherDispatchTests(unittest.TestCase):

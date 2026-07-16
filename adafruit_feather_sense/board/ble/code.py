@@ -7,9 +7,12 @@ advertises as ``FeatherSense``; a host connects and subscribes to the UART TX
 characteristic. The wire protocol is identical, so the host decodes it with the
 same ``FrameDecoder`` (see ``ble_stream.py`` / ``read_ble.py``).
 
-Because BLE offers only ~1-2 KB/s, this build samples the IMU at a reduced rate
-(``Telemetry(imu_hz=20, mag_hz=10)``); ``uart.write`` back-pressures the loop to
-the link's capacity. USB stays at full rate (``board/serial/code.py``).
+This build samples the IMU at a reduced rate (``imu_hz=50`` against USB's 100) —
+BLE is the constraint here, not the loop, which sustains 100 Hz on the serial
+build from the same code. ``uart.write`` back-pressures the loop to the link's
+capacity, so an over-ambitious rate stalls *every* stream rather than erroring:
+the failure mode is a rate quietly below nominal, not an exception. Measured, the
+link saturates at ~100 Hz IMU (~4.4 KB/s), so 50 Hz runs with ~2x margin.
 
 Deploy (BLE build): ``circup install adafruit_ble`` once, then copy this file as
 ``code.py`` plus ``feather_protocol.py``, ``sensors.py``, ``telemetry.py`` and
@@ -24,7 +27,10 @@ from adafruit_ble.services.nordic import UARTService
 
 from sensors import SensorHub
 from status_led import StatusLED
-from telemetry import Telemetry
+from telemetry import Telemetry, _now_ms
+
+
+IMU_HZ = 50  # ~2.2 KB/s of frames, measured to stream cleanly; see the module docstring
 
 
 def main():
@@ -32,12 +38,10 @@ def main():
     ble.name = "FeatherSense"
     uart = UARTService()
     advertisement = ProvideServicesAdvertisement(uart)
-    hub = SensorHub()
+    hub = SensorHub(imu_hz=IMU_HZ)
     led = StatusLED(hub)
     # While streaming, the LED rides the battery slot — no call in the hot loop.
-    telemetry = Telemetry(
-        hub=hub, imu_hz=20, mag_hz=10, on_battery=led.update
-    )  # reduced profile for the BLE link
+    telemetry = Telemetry(hub=hub, imu_hz=IMU_HZ, mag_hz=10, on_battery=led.update)
 
     while True:
         ble.start_advertising(advertisement)
@@ -48,11 +52,16 @@ def main():
         while not ble.connected:
             led.tick(time.monotonic())
         ble.stop_advertising()
+        # No connection-interval tuning here on purpose: requesting the 7.5 ms
+        # minimum measured *identical* to leaving the negotiated default alone
+        # (50.0 Hz either way), so it was removed rather than kept as a
+        # plausible-looking no-op.
         # Stream until the central disconnects; a write raising means the link
         # dropped mid-frame, so fall back out to re-advertise.
         try:
             while ble.connected:
-                delay = telemetry.pump(time.monotonic(), uart.write)
+                next_due_ms = telemetry.pump(_now_ms(), uart.write)
+                delay = (next_due_ms - _now_ms()) / 1000
                 if delay > 0:
                     time.sleep(delay)
         except Exception:  # noqa: BLE001 - disconnected mid-write -> re-advertise

@@ -21,6 +21,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ble_stream import DEFAULT_NAME, FeatherSenseBLEStream  # noqa: E402
+from stream import RateTracker  # noqa: E402
 
 
 def format_record(rec):
@@ -47,6 +48,8 @@ def main(argv=None):
     parser.add_argument("--only", help="Comma-separated stream names to show (e.g. accel,battery)")
     parser.add_argument("--stats", action="store_true",
                         help="Print per-stream sample rates once per second instead of records")
+    parser.add_argument("--seconds", type=float, default=None,
+                        help="Stop after N seconds (default: run until Ctrl-C)")
     args = parser.parse_args(argv)
 
     only = set(args.only.split(",")) if args.only else None
@@ -59,25 +62,21 @@ def main(argv=None):
         print("Feather Sense (BLE) not found or not streaming.", file=sys.stderr)
         return 1
     print("Connected: %s" % stream.port, file=sys.stderr)
-
-    counts = {}
-    last_report = time.monotonic()
+    rates = RateTracker()
+    deadline = time.monotonic() + args.seconds if args.seconds else None
     try:
         while True:
             for rec in stream.poll():
                 if only and rec.name not in only:
                     continue
                 if args.stats:
-                    counts[rec.name] = counts.get(rec.name, 0) + 1
+                    rates.add(rec.name, rec.timestamp_ms)
                 else:
                     print(format_record(rec))
-            if args.stats:
-                now = time.monotonic()
-                if now - last_report >= 1.0:
-                    summary = "  ".join("%s=%d/s" % (k, v) for k, v in sorted(counts.items()))
-                    print("%-60s errors=%d" % (summary, stream.errors))
-                    counts.clear()
-                    last_report = now
+            if args.stats and rates.due():
+                print(rates.report(stream.errors), flush=True)
+            if deadline and time.monotonic() >= deadline:
+                break
             time.sleep(0.02)
     except KeyboardInterrupt:
         pass

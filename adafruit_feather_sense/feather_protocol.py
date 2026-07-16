@@ -81,6 +81,12 @@ SCALES = {
 # `struct` provides only the functions, not the Struct class.
 _TS_FMT = "<I"  # 4-byte little-endian unsigned timestamp (ms)
 
+# A whole three-axis payload in one pack: type, length, timestamp, x, y, z.
+# "<" means no alignment padding, so this is exactly the 18 bytes the generic
+# `encode` builds piecewise. See `encode_xyz`.
+_XYZ_FMT = "<BBIiii"
+_XYZ_VALUE_LEN = 16  # the length field's view: u32 timestamp + 3 x i32
+
 
 def to_raw(msg_type, si_values):
     """Scale SI floats to the int32s put on the wire (device side)."""
@@ -92,27 +98,29 @@ def to_raw(msg_type, si_values):
 
 
 # --- COBS --------------------------------------------------------------------
+_COBS_BLOCK = 0xFE  # 254: the longest run of non-zero bytes one code byte spans
+
+
 def cobs_encode(data):
-    """Encode ``data`` so the result contains no ``0x00`` bytes."""
+    """Encode ``data`` so the result contains no ``0x00`` bytes.
+
+    Zero-run scanning is delegated to ``bytes.split``, which runs in C. The
+    interpreted loop then turns once per *chunk* rather than once per *byte* —
+    on the board an interpreted iteration costs ~39 us, so the byte loop this
+    replaced was the single most expensive thing in the encode path.
+    """
     out = bytearray()
-    code_index = 0
-    out.append(0)  # placeholder for the first code byte
-    code = 1
-    for byte in data:
-        if byte != 0:
-            out.append(byte)
-            code += 1
-            if code == 0xFF:
-                out[code_index] = code
-                code_index = len(out)
-                out.append(0)  # next placeholder
-                code = 1
-        else:
-            out[code_index] = code
-            code_index = len(out)
-            out.append(0)  # next placeholder
-            code = 1
-    out[code_index] = code
+    for chunk in data.split(b"\x00"):
+        # A run longer than 254 needs splitting across code bytes: a 0xFF code
+        # means "254 non-zero bytes, and no zero followed". Unreachable for real
+        # frames (the longest payload is a ~207-byte error), but COBS is only
+        # self-synchronising if it is correct in general.
+        while len(chunk) >= _COBS_BLOCK:
+            out.append(0xFF)
+            out += chunk[:_COBS_BLOCK]
+            chunk = chunk[_COBS_BLOCK:]
+        out.append(len(chunk) + 1)
+        out += chunk
     return bytes(out)
 
 
@@ -149,6 +157,30 @@ def encode(msg_type, timestamp_ms, ints=(), extra_u8=None):
         value.append(extra_u8 & 0xFF)
     payload = bytes((msg_type, len(value))) + bytes(value)
     return cobs_encode(payload) + b"\x00"
+
+
+def encode_xyz(msg_type, timestamp_ms, si_xyz, scale):
+    """Fused scale+pack+frame for the three-axis types (accel/gyro/mag).
+
+    Byte-identical to ``encode(msg_type, ts, to_raw(msg_type, si_xyz))``, but as
+    a single ``struct.pack`` instead of `to_raw`'s list-comp plus a per-int pack
+    and three bytearray concats. That collapses ~15 interpreted operations into
+    one C call, which is why this is the fast path rather than a micro-tweak:
+    `encode` is the most expensive step in the board's loop.
+
+    ``scale`` is the per-type factor from :data:`SCALES` (uniform across x/y/z
+    for every three-axis type — that uniformity is what allows one pack).
+    Callers hoist it out of the sampling loop; see ``telemetry.py``.
+    """
+    return cobs_encode(struct.pack(
+        _XYZ_FMT,
+        msg_type,
+        _XYZ_VALUE_LEN,
+        timestamp_ms & 0xFFFFFFFF,
+        int(round(si_xyz[0] * scale)),
+        int(round(si_xyz[1] * scale)),
+        int(round(si_xyz[2] * scale)),
+    )) + b"\x00"
 
 
 def encode_error(timestamp_ms, source_type, message):

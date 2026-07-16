@@ -26,7 +26,7 @@ import serial
 # Import the shared modules living next to this script.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import feather_protocol as fp  # noqa: E402
-from stream import autodetect_port, to_si  # noqa: E402
+from stream import RateTracker, autodetect_port, to_si  # noqa: E402
 
 
 def format_record(msg_type, timestamp_ms, values):
@@ -60,6 +60,8 @@ def main(argv=None):
                         help="Comma-separated stream names to show (e.g. accel,battery)")
     parser.add_argument("--stats", action="store_true",
                         help="Print per-stream sample rates once per second instead of records")
+    parser.add_argument("--seconds", type=float, default=None,
+                        help="Stop after N seconds (default: run until Ctrl-C)")
     args = parser.parse_args(argv)
 
     port = args.port or autodetect_port()
@@ -71,8 +73,8 @@ def main(argv=None):
     print("Reading %s ..." % port, file=sys.stderr)
     with serial.Serial(port, args.baud, timeout=0.1) as ser:
         decoder = fp.FrameDecoder()
-        counts = {}
-        last_report = time.monotonic()
+        rates = RateTracker()
+        deadline = time.monotonic() + args.seconds if args.seconds else None
         while True:
             chunk = ser.read(4096)
             if chunk and args.raw:
@@ -84,18 +86,15 @@ def main(argv=None):
                     if only and name not in only:
                         continue
                     if args.stats:
-                        counts[name] = counts.get(name, 0) + 1
+                        rates.add(name, timestamp_ms)
                     elif msg_type == fp.MSG_ERROR:
                         print(format_error(timestamp_ms, values))
                     else:
                         print(format_record(msg_type, timestamp_ms, values))
-            if args.stats:
-                now = time.monotonic()
-                if now - last_report >= 1.0:
-                    summary = "  ".join("%s=%d/s" % (k, v) for k, v in sorted(counts.items()))
-                    print("%-60s errors=%d" % (summary, decoder.errors))
-                    counts.clear()
-                    last_report = now
+            if args.stats and rates.due():
+                print(rates.report(decoder.errors), flush=True)
+            if deadline and time.monotonic() >= deadline:
+                return 0
 
 
 if __name__ == "__main__":

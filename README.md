@@ -47,8 +47,14 @@ for motor-development metrics:
 
 ## TODO
 
-- [ ] measure streaming throughput compared to nominal sampling rates
-- [ ] baseline IMU signal stats at rest
+- [x] increase IMU sampling rate to at least 50, ideally 100 Hz — **100 Hz over USB serial, 50 Hz
+      over BLE**, both measured at 100 % of nominal
+- [x] measure streaming throughput compared to nominal sampling rates — `--stats` now reports a
+      device-clock rate + max gap alongside host arrival rate; this is how the above was verified,
+      and it caught the rate silently decaying with board uptime
+- [x] baseline IMU signal stats at rest — see
+      [Sensors](adafruit_feather_sense/README.md#sensors) (accel RMS σ ≈ 0.0102 m/s², gyro
+      ≈ 0.0021 rad/s at the shipped ODR 208)
 - [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
 - [ ] program feather sense in C++ with Zephyr RTOS, or embedded Rust (embassy-nrf and nrf-hal)
 - [ ] program feather sense in embedded Rust (embassy-nrf and nrf-hal). Use schematics from adafruit to build BSP.

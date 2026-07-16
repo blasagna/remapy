@@ -30,6 +30,43 @@ LSM6DS3TR-C in Jan 2024. `SensorHub` tries `LSM6DS33` first and falls back to
 2:1 divider on `VOLTAGE_MONITOR` (true voltage = 2 × pin voltage); `percent` is a
 crude linear LiPo estimate (3.2 V → 0 %, 4.2 V → 100 %).
 
+**One burst, one sample.** Accel and gyro are two streams from one chip, and
+`SensorHub.read_imu()` reads them as **one 12-byte I2C burst** at `0x22` (gyro
+`OUTX_L_G` and accel `OUTX_L_A` are contiguous; the driver's `_bdu` bit is what
+makes a multi-byte read internally consistent) rather than through the driver's
+separate `.acceleration`/`.gyro` properties. It halves the IMU's I2C cost, but
+the reason it is worth reaching past the driver is **simultaneity**: read
+separately the two are ~1 ms apart and independently timestamped, which is a lie
+about a single physical sample instant that any downstream fusion would inherit.
+They now share one timestamp exactly (pinned by a test, and verified end-to-end
+over 463 recorded pairs at max |Δt| = 0 ms).
+
+**IMU output data rate is set, not inherited.** `SensorHub(imu_hz=...)` picks the
+slowest ODR that oversamples the poll **2×** (`_odr_for`: 50 Hz → 104, 100 Hz →
+208). The driver defaults both axes to 104 Hz, which happened to be a fine 2.08×
+for the old 50 Hz build and a useless 1.04× for a 100 Hz one — the loop would
+re-read samples the chip had not refreshed.
+
+Deliberately not *higher* than 2×, because ODR is not free. At rest, holding
+`imu_hz=100` and changing only the ODR (12 s, board on a desk):
+
+| ODR | accel RMS σ | gyro RMS σ |
+|-----|-------------|------------|
+| 104 | 0.00968 m/s² | 0.00147 rad/s |
+| **208** (shipped) | 0.01021 m/s² | 0.00209 rad/s |
+| ratio | **1.05×** | **1.42×** |
+
+The gyro tracks the textbook √2-per-doubling almost exactly (1.42 vs 1.414);
+the accel barely moves (1.05×), because its at-rest noise is dominated by
+ambient vibration rather than sensor bandwidth — so **don't assume √2 applies to
+every stream, it didn't here.** 208 is still the right trade at 100 Hz: stale
+duplicate samples are a worse defect than +0.0006 rad/s (~0.035 °/s) of gyro
+noise. But going to 416 "for headroom" would buy another √2 on the gyro for
+nothing.
+
+These are also the **at-rest baseline** for the IMU signal (accel mean |a| =
+9.96 m/s², i.e. gravity, as a sanity check on the burst read's scaling).
+
 *Not sampled:* the APDS9960 (light/color/gesture/proximity) and the PDM
 microphone. Both are easy to add later as new message types.
 
@@ -189,8 +226,12 @@ an nRF52840.
 The same COBS-framed TLV protocol runs over two interchangeable transports:
 
 - **USB serial** (default) — frames written to `sys.stdout.buffer`; host reads with `pyserial`.
+  IMU at 100 Hz (~4.4 KB/s); the link is nowhere near a constraint.
 - **BLE** — frames written to the **Nordic UART Service**; host reads with `bleak`. Lower
-  bandwidth (~1–2 KB/s), so the board build samples the IMU slower.
+  bandwidth, so the board build samples the IMU slower (50 Hz, ~2.2 KB/s). The link is
+  **measured** to carry ~100 Hz IMU (~4.4 KB/s) before it saturates — see
+  [Sample rates](#sample-rates). An earlier "~1–2 KB/s" figure here was never measured and
+  understated the link by ~2×.
 
 The sampling loop (`telemetry.py`) is transport-agnostic; each board build is a thin `code.py`
 that only supplies the emit sink. On the host, both transports expose the **same stream
@@ -203,11 +244,11 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 |------|---------|---------|
 | [`feather_protocol.py`](feather_protocol.py) | board **+** host | TLV encode/decode, COBS, `FrameDecoder` |
 | [`sensors.py`](sensors.py) | board | `SensorHub` — inits the raw sensors, one read method per stream |
-| [`telemetry.py`](telemetry.py) | board | `Telemetry.pump(now, emit)` — the shared sample/schedule/encode loop (rates configurable) |
+| [`telemetry.py`](telemetry.py) | board | `Telemetry.pump(now_ms, emit)` — the shared sample/schedule/encode loop (rates configurable). Host-importable and tested: it defers its `sensors` import |
 | [`status_led.py`](status_led.py) | board | `StatusLED.tick(now)` — onboard NeoPixel battery indicator (`band_for` is pure and host-testable) |
 | [`motion.py`](motion.py) | host | `GravityFilter` / `derive_motion` — gravity + linear_accel from raw accel |
-| [`board/serial/code.py`](board/serial/code.py) | board | USB serial entry: `emit = sys.stdout.buffer.write`, full rates |
-| [`board/ble/code.py`](board/ble/code.py) | board | BLE entry: Nordic UART peripheral (`FeatherSense`), `emit = uart.write`, reduced rates |
+| [`board/serial/code.py`](board/serial/code.py) | board | USB serial entry: `emit = sys.stdout.buffer.write`, full rates (IMU 100 Hz) |
+| [`board/ble/code.py`](board/ble/code.py) | board | BLE entry: Nordic UART peripheral (`FeatherSense`), `emit = uart.write`, reduced rates (IMU 50 Hz) |
 | [`stream.py`](stream.py) | host | serial `FeatherSenseStream` + shared `FrameRecordDecoder` (bytes→SI records) |
 | [`ble_stream.py`](ble_stream.py) | host | BLE `FeatherSenseBLEStream` (bleak on a background thread; same interface) |
 | [`read_stream.py`](read_stream.py) | host | serial reader CLI: decode, int→SI (`to_si`), pretty-print / `--stats` / `--raw` |
@@ -217,30 +258,62 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 ## Sample rates
 
 Rates are `Telemetry(...)` constructor args, so each board build picks its own. Nominal vs.
-**measured** on the serial build (15 s capture, board at rest, CircuitPython 10.2.1):
+**measured** (board at rest, CircuitPython 10.2.1). Quote the **device-clock** rate: it is derived
+from the timestamps the board stamps at read, so it measures the board rather than the host's
+polling (see [Measuring](#measuring)).
 
-| Stream | Nominal (serial) | Measured | % of nominal | Nominal (BLE) |
-|--------|------------------|----------|--------------|---------------|
-| accel | 50 Hz (`imu_hz`) | **48.9 Hz** | 97.9 % | 20 Hz (measured **21**) |
-| gyro | 50 Hz (`imu_hz`) | **49.0 Hz** | 97.9 % | 20 Hz (measured **21**) |
-| mag | 20 Hz (`mag_hz`) | **20.7 Hz** | ~100 % | 10 Hz (measured **10**) |
-| battery | 0.2 Hz (`battery_hz`) | 0.2 Hz | 100 % | 0.2 Hz |
+| Stream | Nominal (serial) | Measured | % of nominal | Nominal (BLE) | Measured |
+|--------|------------------|----------|--------------|---------------|----------|
+| accel | 100 Hz (`imu_hz`) | **100.0 Hz** | 100 % | 50 Hz (`imu_hz`) | **50.0 Hz** |
+| gyro | 100 Hz (`imu_hz`) | **100.0 Hz** | 100 % | 50 Hz (`imu_hz`) | **50.0 Hz** |
+| mag | 20 Hz (`mag_hz`) | **20.0 Hz** | 100 % | 10 Hz (`mag_hz`) | **10.0 Hz** |
+| battery | 0.2 Hz (`battery_hz`) | 0.2 Hz | 100 % | 0.2 Hz | 0.2 Hz |
 
-(Re-measured with the [status LED](#status-led) build, which costs ~0.2 accel samples/s against
-an LED-free 49.1 Hz on the same board — within the run-to-run spread. Earlier rows below were
-captured before the LED existed.)
+### The rate used to decay with uptime
 
-How it got there — each step measured on the board:
+**Every measurement in this file before 2026-07-16 was taken moments after a reflash, and that
+is the only reason the old numbers looked good.** The rate was a function of *board uptime*:
+
+| Build | uptime | accel | mag |
+|-------|--------|-------|-----|
+| pre-fix (`imu_hz=50`) | ~0 (just reflashed) | 48.9 Hz | 20.7 Hz |
+| pre-fix (`imu_hz=50`) | **5.6 h** | **43.5 Hz** | 18.7 Hz |
+| post-fix (`imu_hz=50`) | 5.6 h | **50.0 Hz** | 20.1 Hz |
+
+Two bugs compounded, and neither was visible:
+
+1. **CircuitPython builds single-precision floats.** `time.monotonic()` returns seconds since
+   boot, so its ULP grows with uptime: **~2 ms at 5.6 h**, ~4 ms at 10 h. A 20 ms schedule was
+   being quantized by a clock that got coarser the longer the board ran.
+2. **The schedule absorbed lateness instead of correcting it.** `pump` rescheduled each slot as
+   `due = now + interval` — from the *observed* time, which is always ≥ the deadline. So every
+   cycle's quantization and work time was baked permanently into the next period.
+
+Together: at 5.6 h uptime the effective period inflated 20 ms → ~23 ms, i.e. 43.5 Hz against a
+50 Hz nominal — while **timestamps stayed correct**, so nothing looked wrong. For a project that
+records therapy sessions, that is a data bug wearing a disguise.
+
+The fix is to run the schedule on **integer milliseconds** from `time.monotonic_ns()` (never a
+float; ms is also the wire timestamp unit) and to advance `due += interval` from the deadline,
+with a clamp that drops the backlog after a long stall rather than emitting a burst of stale
+samples. The result holds **100.0 % of nominal at 5.6 h uptime** — better than the pre-fix build
+ever managed even at zero uptime.
+
+This also retires a claim: the old "residual ~2.5 % is the cooperative `pump()` loop" was wrong.
+It was the scheduler's arithmetic, and it is gone.
+
+### How it got there
+
+Each step measured on the board:
 
 | Change | accel | mag |
 |--------|-------|-----|
 | original (env/altitude on board, gravity+linear encoded on board, 100 kHz I2C) | 41.0 Hz | 16.0 Hz |
 | + environmental sensing removed | 48.3 Hz | 19.2 Hz |
-| + I2C at 400 kHz | **48.8 Hz** | **19.8 Hz** |
-
-The residual ~2.5 % is the cooperative `pump()` loop: all four streams share it, so each sensor's
-I2C read and frame encode delays whatever is due next. **This is jitter in sample *spacing*, not
-wrong times** — timestamps are stamped at read, so recorded data stays accurate.
+| + I2C at 400 kHz | 48.8 Hz | 19.8 Hz |
+| *(the three rows above were measured at ~0 uptime; at 5.6 h the build did 43.5 Hz)* | | |
+| + integer-ms schedule, drift fix (`imu_hz` still 50) | **50.0 Hz** | 20.1 Hz |
+| + IMU burst read, ODR 208 Hz, **`imu_hz=100`** | **100.0 Hz** | 20.0 Hz |
 
 The original 41 Hz was **not** loop saturation (it still slept 17 % of the time) — it was
 *blackout*. The 1 Hz `env`/`altitude` reads blocked for ~152 ms/s, and 152 ms of dead time removes
@@ -248,17 +321,72 @@ The original 41 Hz was **not** loop saturation (it still slept 17 % of the time)
 
 **Why 400 kHz bought only +0.5 Hz.** It halves read time, but by then the loop was no longer the
 constraint — the rate is capped by `imu_hz`, and the saved time became *sleep*, not throughput.
-Its real value is **headroom**: the loop went from 17 % idle (original) to **58 % idle**, with
-`pump()` busy only ~4.9 s of every 12. That is the budget to raise `imu_hz`, add streams, or
-absorb a slower transport — not a bigger number on this table.
+Its real value was **headroom**, and this change is what finally spent it: 100 Hz is exactly the
+budget that 400 kHz banked. The lesson generalises, and the sections below lean on it — **while
+the loop has idle, a loop optimisation shows up as more idle, not as a bigger number here.** To
+see one at all you have to remove the `imu_hz` cap first (see [Measuring the
+ceiling](#measuring-the-ceiling)).
 
-To go past 50 Hz you must raise `imu_hz` itself (there is now room); it is capped by the schedule,
-not the hardware. The BLE build stays deliberately slower (`imu_hz=20, mag_hz=10`) — `uart.write`
-back-pressures the loop to the ~1–2 KB/s link regardless.
+### What limits BLE
+
+The BLE build ships at `imu_hz=50, mag_hz=10` (~2.2 KB/s). Measured, not assumed:
+
+| Nominal `imu_hz` | measured accel | verdict |
+|------------------|----------------|---------|
+| 50 (shipped) | **50.0 Hz** | link has margin; errors=0 |
+| 150 | ~100.6 Hz | **link saturated** at ~100 Hz IMU (~4.4 KB/s) |
+
+So the link carries ~2× the shipped rate, and the old "~1–2 KB/s" figure understated it by ~2×.
+It was never measured; `imu_hz=20` was a guess that happened to be safe.
+
+**Telling "link saturated" from "loop too slow", without instrumenting the board.** BLE
+notifications are acknowledged and never dropped, so host arrival rate == board emit rate. The
+device-timestamp spacing then decides it: evenly spaced *at nominal* is working; evenly spaced
+*slower* than nominal (the 150 Hz row above) means the loop is stalling inside `uart.write`, i.e.
+the link; bursts at nominal separated by long gaps mean the 512 B `StreamOut` buffer filled and
+`write` hit its 1 s timeout. The loop is independently ruled out by the serial build, which
+sustains 100 Hz on the same code.
+
+**Connection interval: measured to be a red herring.** Requesting the 7.5 ms minimum via
+`connection.connection_interval` measured **identical** to leaving the negotiated default alone
+(50.0 Hz either way), so that code was removed rather than kept as a plausible-looking no-op. MTU
+is likewise not the lever: bleak reports the 23-byte default on BlueZ (one 20-byte frame per
+notification) while the board still sustains ~110 notifications/s.
+
+### Measuring the ceiling
+
+A loop optimisation is invisible in the table above, because at 100 Hz the loop still idles. So
+measure the **ceiling**: set `imu_hz` far past reach (400) and the achieved rate *is* the loop's
+throughput. Each row is one build, `--stats` over ~8 s:
+
+| Build (all with the burst read) | ceiling | Δ |
+|---------------------------------|---------|---|
+| original `encode` + per-byte `cobs_encode` | 191.5 Hz | — |
+| **+ fused `encode_xyz`** | 255.5 Hz | **+33 %** |
+| **+ `split`-based `cobs_encode`** | **290.5 Hz** | **+14 %** |
+
+So the shipped 100 Hz build runs at ~34 % of ceiling — **~66 % idle**, more headroom than the
+58 % it started with, at double the rate.
+
+**This corrects the advice this file used to give.** It named `cobs_encode` "the obvious next
+target"; measured, it is worth less than half of the fused encode. The reason is visible in the
+data: a real accel payload is 18 bytes of which **8 are zero** (fixed-point int32s of small
+numbers are mostly high-order zeros), so COBS emits 9 chunks from 18 bytes and there is little
+for a faster scan to chew on. A `bytes.find`-based rewrite is actually **0.63× — a regression**;
+`split` wins because it turns the interpreted loop once per *chunk* instead of once per *byte*.
+The bigger prize was `to_raw` + `encode`'s list-comp, per-int `struct.pack` and bytearray concats
+collapsing into **one `struct.pack`** — ~15 interpreted operations to one C call.
+
+Both rewrites are **byte-identical** to what they replaced, which is not an aspiration: it is
+enforced by ~8000 fuzz cases plus the 253/254/255-byte block-split boundaries against the
+original encoder kept verbatim as an oracle in `tests/test_feather.py`, cross-checked against the
+independent `cobs` PyPI package.
 
 ### Where the loop time goes
 
-Measured per phase on the board — useful before optimising the wrong thing:
+Measured per phase on the board — useful before optimising the wrong thing. **These are the
+pre-2026-07-16 numbers**, i.e. the cost structure that motivated the encode work above; the
+`encode` rows no longer describe the shipped code (see the ceiling table for its effect).
 
 | Phase | Cost | Note |
 |-------|------|------|
@@ -272,21 +400,54 @@ Measured per phase on the board — useful before optimising the wrong thing:
 | `write(4 frames batched)` | 0.173 ms | batching saves ~1.6 % — not worth a queue |
 
 Note the schedule's "reader" closures include their `encode`, so an in-situ `read:accel` (~2.6 ms
-at 400 kHz) is read + encode, not the bare sensor read.
+at 400 kHz) is read + encode, not the bare sensor read. The two separate IMU reads in this table
+are now a single 12-byte burst (`read_imu`), so a cycle pays one transaction, not two.
 
-Three conclusions worth keeping:
+**A caveat this table cost us once:** a per-phase cost sums to less than the loop, and it cannot
+tell you what a change is *worth* while the loop still idles. The ceiling probe can. Use this
+table to find the expensive phase, and the ceiling to decide whether fixing it mattered.
+
+Four conclusions worth keeping:
 
 - **The transport is not the bottleneck.** Batching writes buys ~1.6 % of the loop. Don't bother.
-- **`encode` is.** Which is why moving the derived `gravity`/`linear_accel` frames to the host
-  mattered: it deleted two of every four frames per cycle. If more is ever needed, `cobs_encode`
-  is a pure-Python per-byte loop and the obvious next target.
+- **`encode` is** — and it stayed the answer. Moving the derived `gravity`/`linear_accel` frames
+  to the host deleted two of every four frames per cycle; fusing what remained into one
+  `struct.pack` was worth another +33 % of loop throughput.
 - **A faster read only helps while the loop is the constraint.** 400 kHz was worth ~1.8× per read
   but only +0.5 Hz, because by then `imu_hz` was the cap. It bought idle, not rate.
+- **Profile the payload, not just the code.** `cobs_encode` looked like the hot spot by share of
+  `encode`, but its input is half zeros, which is what made the intuitive `find`-based fix a
+  regression. The byte loop was slow because it was *interpreted per byte*, not because it was
+  scanning far.
 
 Reproduce any of this by timing phases on the board with a temporary `code.py` (loop each phase a
 few hundred times — CircuitPython's monotonic clock ticks at only ~1024 Hz, so a single read is
 unmeasurable), or instrument the real loop by wrapping the `Telemetry._schedule` reader slots and
-the emit sink, then subtracting: `wall = reads + emit + pump overhead + sleep`.
+the emit sink, then subtracting: `wall = reads + emit + pump overhead + sleep`. For whole-loop
+throughput prefer the [ceiling probe](#measuring-the-ceiling) — no instrumentation, and it cannot
+lie to you about idle.
+
+### Measuring
+
+`read_stream.py --stats` / `read_ble.py --stats` print, per stream, per second:
+
+```
+--- 1.001 s ---  errors=1
+  accel     n= 100  host=  99.9/s  dev= 100.0/s  gap max=  11.0 ms
+```
+
+- **`dev`** — from the **device** timestamps (stamped at read on the board), so it measures the
+  board independently of host scheduling, USB buffering or BLE batching. **This is the number to
+  quote.**
+- **`host`** — arrivals over true elapsed wall time. It only tells you the link kept up; it
+  swings ±5 % on BLE from the host's own poll jitter while `dev` sits still.
+- **`gap max`** — largest interval between consecutive device timestamps. A rate on target with an
+  outsized gap means the stream stalled and caught up in a burst, which neither average shows.
+
+**Divide by measured elapsed, not by the nominal interval.** These tools used to print a raw count
+labelled `/s` over a window gated on `>= 1.0 s` — which a blocking read always overshoots, so a
+true 91 Hz stream reported "100/s". Every board number in this file was read off that tool, and
+the error ran in the flattering direction.
 
 ### Why not interrupts?
 

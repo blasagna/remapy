@@ -71,6 +71,69 @@ def _record(msg_type, timestamp_ms, values):
     return SensorRecord(name, msg_type, timestamp_ms, to_si(msg_type, values), fields)
 
 
+class RateTracker:
+    """Per-stream sample-rate accounting for the reader CLIs' ``--stats`` mode.
+
+    Reports two rates per stream, because they answer different questions:
+
+    - **host** — samples counted over the *true* elapsed wall time. What arrived
+      here. Divide by measured elapsed, never by the nominal report interval: a
+      reader loop gated on ``>= 1.0`` s always overshoots (a blocking read
+      overshoots by its own timeout), so counting `n` per "1 s" over-reports by
+      however much the window ran long.
+    - **dev** — derived from the *device* timestamps, which are stamped at read
+      on the board. This measures what the board actually did, independent of
+      host scheduling, USB buffering or BLE batching. It is the number to quote
+      for a sample rate; ``host`` only tells you the link kept up.
+
+    ``gap`` is the largest interval between consecutive device timestamps in the
+    window. A rate at target with an outsized gap means the stream stalled and
+    caught up in a burst — invisible in either average.
+    """
+
+    def __init__(self, interval_s=1.0):
+        self.interval_s = interval_s
+        self._start = time.monotonic()
+        self._streams = {}  # name -> [count, first_ts, last_ts, max_gap_ms]
+
+    def add(self, name, timestamp_ms=None):
+        slot = self._streams.get(name)
+        if slot is None:
+            self._streams[name] = [1, timestamp_ms, timestamp_ms, 0]
+            return
+        slot[0] += 1
+        if timestamp_ms is None:
+            return
+        if slot[1] is None:
+            slot[1] = timestamp_ms
+        elif slot[2] is not None:
+            gap = timestamp_ms - slot[2]
+            if gap > slot[3]:
+                slot[3] = gap
+        slot[2] = timestamp_ms
+
+    def due(self):
+        return time.monotonic() - self._start >= self.interval_s
+
+    def report(self, errors=0):
+        """Return the formatted report for this window and start a new one."""
+        elapsed = time.monotonic() - self._start
+        lines = ["--- %.3f s ---  errors=%d" % (elapsed, errors)]
+        for name in sorted(self._streams):
+            count, first_ts, last_ts, max_gap = self._streams[name]
+            host_hz = count / elapsed if elapsed > 0 else 0.0
+            line = "  %-9s n=%4d  host=%6.1f/s" % (name, count, host_hz)
+            # (count - 1) intervals span first..last: an unbiased rate estimate
+            # that needs no clock sync between the board and this host.
+            if count > 1 and first_ts is not None and last_ts is not None and last_ts > first_ts:
+                dev_hz = (count - 1) * 1000.0 / (last_ts - first_ts)
+                line += "  dev=%6.1f/s  gap max=%6.1f ms" % (dev_hz, max_gap)
+            lines.append(line)
+        self._streams.clear()
+        self._start = time.monotonic()
+        return "\n".join(lines)
+
+
 class FrameRecordDecoder:
     """Turn raw transport bytes into SI-converted :class:`SensorRecord`s.
 

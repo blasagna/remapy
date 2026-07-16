@@ -208,22 +208,47 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
 - **On the board** (deploy = copy the four shared modules + the chosen entry to the CIRCUITPY
   root as `code.py`; libs via `circup install adafruit_lsm6ds adafruit_lis3mdl neopixel`):
   `sensors.py`
-  (`SensorHub` — **raw signals only**: IMU with LSM6DS33/TR-C fallback, LIS3MDL, battery via
-  `board.VOLTAGE_MONITOR`; the I2C bus is opened at **400 kHz**, not the 100 kHz `busio` default —
-  measured ~1.8× per read). Environmental sensing (BMP280 temp/pressure/altitude, SHT31-D
-  humidity) was **removed**: forced-mode conversions blocked the loop ~152 ms/s (~15 % of wall,
-  ~7.6 lost IMU samples/s) for unused 1 Hz data. Re-add only with the BMP280 in `MODE_NORMAL`.
-  Measured IMU rate: 41 Hz → 48.3 Hz (env removal) → **48.8 Hz** (400 kHz), 97.5 % of the 50 Hz
-  nominal, with the loop now **58 % idle** — headroom to raise `imu_hz`, not just a faster number.
-  Then `telemetry.py` (`Telemetry.pump(now,
-  emit)` — the transport-agnostic sample/schedule/encode loop, rates are ctor args); and **two
-  entry points, a literal `code.py` each**: `board/serial/code.py` (USB, `emit =
-  sys.stdout.buffer.write`, full rates) and `board/ble/code.py` (Nordic UART peripheral named
-  `FeatherSense` via `adafruit_ble` `UARTService`, `emit = uart.write`, reduced IMU rate for the
-  ~1–2 KB/s link). Each entry builds one `SensorHub` and injects it (`Telemetry(hub=hub)`).
+  (`SensorHub(imu_hz=...)` — **raw signals only**: IMU with LSM6DS33/TR-C fallback, LIS3MDL,
+  battery via `board.VOLTAGE_MONITOR`; the I2C bus is opened at **400 kHz**, not the 100 kHz
+  `busio` default — measured ~1.8× per read). Environmental sensing (BMP280 temp/pressure/altitude,
+  SHT31-D humidity) was **removed**: forced-mode conversions blocked the loop ~152 ms/s (~15 % of
+  wall, ~7.6 lost IMU samples/s) for unused 1 Hz data. Re-add only with the BMP280 in
+  `MODE_NORMAL`. `read_imu()` returns accel **and** gyro from **one 12-byte burst** at reg `0x22`
+  (they are contiguous on the chip; driver sets `_bdu`), so they share **one sample instant and one
+  timestamp** — the point is simultaneity, not just the halved I2C cost; don't split it back into
+  two property reads. The IMU **ODR is set, never inherited**: `_odr_for` picks the slowest rate
+  that oversamples the poll 2× (100 Hz → 208). The driver's 104 Hz default is a fine 2.08× at
+  `imu_hz=50` and a broken 1.04× at 100. Don't raise it further — ODR above 2× buys noise (~√2 RMS
+  per doubling), not information.
+  Then `telemetry.py` (`Telemetry.pump(now_ms, emit) -> next_due_ms`
+  — the transport-agnostic sample/schedule/encode loop, rates are ctor args; it defers its
+  `sensors` import so the host can import it, which is what makes the schedule testable); and
+  **two entry points, a literal `code.py` each**: `board/serial/code.py` (USB, `emit =
+  sys.stdout.buffer.write`, IMU **100 Hz**) and `board/ble/code.py` (Nordic UART peripheral named
+  `FeatherSense` via `adafruit_ble` `UARTService`, `emit = uart.write`, IMU **50 Hz** — the link
+  measures ~100 Hz IMU before saturating, so 50 has ~2× margin; the old "~1–2 KB/s" figure was
+  never measured and understated it ~2×). Each entry builds one `SensorHub` and injects it
+  (`Telemetry(hub=hub)`), passing the same `imu_hz` to both so the ODR and the poll agree.
   `Telemetry` also takes `on_battery(percent)` — an optional sink fired from the existing battery
   slot, so a display can piggyback that read instead of polling (used by the status LED; must not
   raise, or `pump`'s handler eats the battery frame).
+- **The schedule runs on integer milliseconds — never `time.monotonic()`.** CircuitPython builds
+  **single-precision** floats, so `monotonic()`'s ULP grows with uptime (~2 ms at 5.6 h, ~4 ms at
+  10 h). Combined with the old `due = now + interval` (which rescheduled from the *observed* time
+  and so baked each cycle's lateness in permanently), the sample rate **silently decayed with
+  uptime**: 48.9 Hz just after a reflash but **43.5 Hz at 5.6 h**, against a 50 Hz nominal, with
+  timestamps still correct so nothing looked wrong. Every pre-2026-07-16 benchmark in the README
+  was taken right after a flash, which is why nobody saw it. `pump` now takes integer `now_ms`
+  (from `monotonic_ns`) and advances `due += interval` from the deadline, with a clamp that drops
+  the backlog after a long stall instead of bursting stale samples: **100.0 % of nominal at 5.6 h
+  uptime**. Don't reintroduce float seconds here, and don't "simplify" the reschedule back to
+  `now + interval`.
+- **Measured rate chain (accel):** 41 → 48.3 (env removal) → 48.8 (400 kHz) *[all at ~0 uptime;
+  43.5 at 5.6 h]* → **50.0** (integer-ms schedule + drift fix, at 5.6 h) → **100.0**
+  (burst read + ODR 208 + `imu_hz=100`). Loop **ceiling** (probe with `imu_hz=400`, the only way
+  to see a loop win while `imu_hz` still caps the rate): 191.5 → 255.5 (fused `encode_xyz`) →
+  **290.5 Hz** (`split`-based `cobs_encode`). So the shipped 100 Hz build is ~34 % of ceiling,
+  **~66 % idle**.
 - **Status LED:** `status_led.py` (board) — lights the onboard NeoPixel red/yellow/green by
   battery level (<25 / 25–60 / >60 %, ±3 % hysteresis per edge, edges exclusive-below, so a
   reading resting on a threshold can't flicker). Nothing latches — the board charges over USB, so
@@ -232,9 +257,10 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   `Telemetry(on_battery=led.update)`, adding **no per-iteration call** to the sampling loop. The
   first cut called `StatusLED.tick(now)` from `code.py` each iteration and measured **-0.93 accel
   samples/s** (49.14 → 48.22, median 49 → 48) — of which **-0.59 was the bare guard check**, not
-  the ADC read: a method call here is ~150 µs (cf. `cobs_encode` at 708 µs) and the loop turns
-  ~50-60×/s. Riding the battery slot costs **-0.21** (median 49). Don't reintroduce a
-  per-iteration LED call. `tick(now)` survives **only** for the BLE advertising wait, where `pump`
+  the ADC read: a method call here is ~150 µs and the loop turned ~50-60×/s. Riding the battery
+  slot costs **-0.21** (median 49). Don't reintroduce a per-iteration LED call — **the rule got
+  stricter**, since the loop now turns ~100-120×/s, so any per-iteration cost roughly doubles.
+  `tick(now)` survives **only** for the BLE advertising wait, where `pump`
   isn't running so nothing drives `on_battery`, and the idle loop makes the call free. `update`
   never raises (an escaping error would trip the BLE re-advertise handler) and writes the pixel
   only when the band changes. `board`/`neopixel` are imported in `__init__`, not at module scope,
@@ -250,6 +276,15 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   SI). Codes are dense and carry **no compatibility guarantee** — board and host ship from this one
   file, so renumbering is resolved by reflashing; recordings are unaffected (`/feather` groups are
   keyed by stream *name*). Add a stream = append the next free code.
+  **`encode_xyz` is the board's fast path** for the three-axis types: it fuses `to_raw` + pack +
+  frame into a single `struct.pack` (~15 interpreted ops → one C call), worth **+33 % of loop
+  ceiling** — `encode` is the loop's most expensive step, so this is where board wins live.
+  `cobs_encode` uses `bytes.split` (turns the interpreted loop once per *chunk*, not per *byte*;
+  +14 %). Both are **byte-identical** to the originals and must stay so — `tests/test_feather.py`
+  keeps the old encoders verbatim as oracles and fuzzes ~8000 cases plus the 254-byte block-split
+  boundary. Note for future optimisers: a `bytes.find`-based COBS is a **0.63× regression**,
+  because a real payload is half zero bytes (small fixed-point int32s), so there are no long runs
+  to scan — profile the payload, not just the code.
 - **Host-derived motion:** `motion.py` (host-only) — `GravityFilter.update(ts_ms, xyz)` /
   `derive_motion(ts, values, tau_s)` reconstruct `gravity` (single-pole low-pass, `GRAVITY_TAU_S`)
   and `linear_accel = accel − gravity` from the raw accel stream. This used to run on the board
@@ -316,9 +351,16 @@ display, or GPU and runs in well under a second:
   that derived streams are *not* stored and that `motion(tau_s=…)` re-derives), and the viewer's
   `log_sensors` + its derived plots (with `rr` mocked), and the status LED (`band_for` bands +
   hysteresis in both directions, plus `StatusLED.update`/`tick` against an injected `FakePixel` —
-  pinning that it writes only on a band change, never raises, and no-ops without a pixel). The LED
-  is the only board-side logic reachable from the host. No board, serial port, or BLE adapter
-  needed.
+  pinning that it writes only on a band change, never raises, and no-ops without a pixel). No
+  board, serial port, or BLE adapter needed.
+  Also **`TelemetryScheduleTests`** — the board's sampling schedule, driven by a fake hub and a
+  fake clock (reachable because `telemetry.py` defers its `sensors` import; `status_led.py` is the
+  same trick). It pins the two bugs that cost the rate: no erosion under **sustained lateness**
+  (the `due = now + interval` regression) and no erosion at **high uptime** (the float32
+  `monotonic()` decay), plus the stall clamp, one-read-serves-both-streams, and that accel/gyro
+  share a timestamp. Plus **`CobsEncodeTests`/`EncodeXyzTests`** (byte-identity fuzz vs. the
+  original encoders) and **`RateTrackerTests`** (the `--stats` arithmetic — it is the acceptance
+  instrument, and it used to over-report ~10 %).
 - `cv2.VideoCapture`/`VideoWriter` are patched; the native MediaPipe `PoseLandmarker`/
   `FaceDetector` are patched at their import site (`ensure_model` + the class) so no model loads;
   `urllib.request.urlretrieve` is patched in the `ensure_model` tests; the `rerun` SDK is patched
