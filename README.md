@@ -1,7 +1,11 @@
 # remapy
 Playing with tools inspired by Remy's therapies
 
+**NOTE: This is a work in progress**
+
 Remy + therapy + python = remapy
+
+Much of this is implemented using Claude code and other coding LLMs. I build similar tools to sample sensors from embedded systems and process them in my day job. 
 
 ## Motivation
 
@@ -44,6 +48,8 @@ for motor-development metrics:
 ## TODO
 
 - [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
+- [ ] measure streaming throughput compared to nominal sampling rates
+- [ ] baseline IMU signal stats at rest
+- [ ] port to Android 
 - [ ] consider multiple camera views
-- [ ] consider adding IMUs at trunk, head, waist, shoulders
 - [ ] consider adding a depth camera
