@@ -117,10 +117,52 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 | [`read_ble.py`](read_ble.py) | host | BLE reader CLI (bleak): `--address` / `--name` / `--stats` / `--only` |
 | [`__init__.py`](__init__.py) | host | `open_feather(transport, ...)` — transport-selecting factory used by the apps |
 
-Default sample rates (`telemetry.py`): serial build — accel 50 Hz (emits `accel` + `gravity` +
-`linear_accel` together), gyro 50 Hz, mag 20 Hz, env/altitude 1 Hz, battery 0.2 Hz; BLE build
-halves/quarters the IMU (`imu_hz=20, mag_hz=10`) to fit the link. (Observed serial throughput is a
-bit lower than nominal because the streams share one loop; tune via the `Telemetry(...)` args.)
+## Sample rates
+
+Rates are `Telemetry(...)` constructor args, so each board build picks its own. Nominal vs.
+**measured** on the serial build (12 s capture, board at rest, CircuitPython 10.2.1):
+
+| Stream | Nominal (serial) | Measured | Nominal (BLE) |
+|--------|------------------|----------|---------------|
+| accel / gravity / linear_accel | 50 Hz (`imu_hz`) | ~41 Hz | 20 Hz |
+| gyro | 50 Hz (`imu_hz`) | ~41 Hz | 20 Hz |
+| mag | 20 Hz (`mag_hz`) | ~16 Hz | 10 Hz |
+| env / altitude | 1 Hz (`env_hz`) | 1.0 Hz | 1 Hz |
+| battery | 0.2 Hz (`battery_hz`) | 0.2 Hz | 0.2 Hz |
+
+The IMU/mag streams land ~18–20 % under nominal: all six share one cooperative `pump()` loop, so
+each sensor's I2C read and frame encode delays whatever is due next. The slow streams hit their
+rates exactly (huge timing slack). **This is jitter in sample *spacing*, not wrong times** —
+timestamps are stamped at read, so recorded data stays accurate.
+
+One accelerometer read fans out into **three** frames sharing a timestamp (`accel`, `gravity`,
+`linear_accel`), so ~41 Hz of accel sampling is ~123 frames/s on the wire; `gyro` is a separate
+read at the same `imu_hz`.
+
+To close the gap: raise `imu_hz` above 50 to compensate for loop overhead (one-line change,
+timestamps stay honest), or drop `mag_hz` to free loop time. The BLE build is deliberately slower
+(`imu_hz=20, mag_hz=10`) — `uart.write` back-pressures the loop to the ~1–2 KB/s link anyway.
+
+### Why not interrupts?
+
+**CircuitPython has no user-defined interrupt handlers** — no `attachInterrupt`, no MicroPython
+`Pin.irq(handler=...)`. It's a firmware-wide design decision (Python callbacks from an ISR are
+unsafe with the GC/heap), so there is no Python-level workaround. The interrupt-backed modules
+that do exist (`countio`, `keypad`, `rotaryio`, `pulseio`, `alarm.pin.PinAlarm`) service the
+interrupt in C and hand back a queue/counter; none apply to an I2C sensor. `alarm.pin.PinAlarm`
+is the only true hardware interrupt available, and only for waking from sleep.
+
+Interrupts also wouldn't fix the rate gap above — that's **throughput** (I2C transactions + USB
+writes), not the scheduling latency interrupts solve. A data-ready IRQ would save a few hundred µs
+of notice but still cost one I2C read per sample.
+
+The real lever would be the IMU's **~8 KB FIFO**: buffer at a hardware-clocked ODR, drain many
+samples per burst read. That amortizes per-transaction overhead *and* gives better timestamp
+regularity than the loop can (spacing comes from the chip's clock). Catch: the installed
+`adafruit_lsm6ds` (4.6.3) exposes **no FIFO support** — the only interrupt-adjacent symbol is
+`_route_int1`, used solely for the pedometer step-counter — so it means driving `FIFO_CTRL1–5` /
+`FIFO_STATUS` by hand over the existing I2C connection. Unverified: whether the Feather Sense
+routes the IMU's INT1 to a GPIO at all (check `dir(board)` at the REPL).
 
 ## Deploy
 
@@ -155,6 +197,40 @@ cp feather_protocol.py sensors.py telemetry.py board/ble/code.py /media/bob/CIRC
 ```
 
 Only one `code.py` runs at a time; swap builds by re-copying the other transport's `code.py`.
+
+**Eject cleanly — CIRCUITPY corrupts easily.** Unplugging the board without unmounting can leave
+the FAT filesystem damaged (CircuitPython drives are unusually prone to this when yanked
+mid-write). Unmount before unplugging:
+
+```bash
+udisksctl unmount -b /dev/sdb1     # confirm the device first: mount | grep -i circuitpy
+```
+
+Symptoms of a corrupt drive: files that `ls` fine but return `Input/output error` on read, and a
+drive that mounts read-only (or flips to read-only seconds after a write). Confirm in the kernel
+log:
+
+```bash
+journalctl -k | grep -i fat-fs
+# FAT-fs (sdb1): Volume was not properly unmounted. Some data may be corrupt. Please run fsck.
+# FAT-fs (sdb1): error, fat_get_cluster: invalid cluster chain (i_pos 125)
+# FAT-fs (sdb1): Filesystem has been set read-only
+```
+
+Repair it — **replugging does not fix this**; only fsck rewrites the FAT (a replug clears the
+read-only mount, which looks healthy but the bad cluster chain is still on flash):
+
+```bash
+udisksctl unmount -b /dev/sdb1 && sudo fsck.vfat -a -v /dev/sdb1
+```
+
+Then remount and verify: a clean mount logs **no** `Volume was not properly unmounted` warning
+(that message is the FAT dirty bit, which fsck clears — its absence is how you know the repair
+took), and a `touch` on the drive succeeds with no new cluster errors. fsck truncates or deletes
+the corrupt file, so re-copy the build afterwards; `lib/` and the circup-installed drivers
+normally survive untouched. Any edit made *directly on the board* that isn't mirrored in the repo
+is unrecoverable. Last resort if fsck can't repair it: `storage.erase_filesystem()` at the REPL
+wipes CIRCUITPY clean (erases `lib/` — re-run the `circup install` above).
 
 ## Read the stream (host)
 
@@ -222,10 +298,8 @@ identical regardless of transport.
   Ctrl-D (`0x04`) to soft-reload `code.py`; once it's looping it streams
   continuously. The host reader tolerates the leading REPL banner text (it
   decodes as one dropped frame, then resyncs).
+- Piping `read_stream.py` into another command (`| head`, `| grep`) can show
+  **nothing** — Python block-buffers stdout when it isn't a TTY, and `--stats`
+  repaints a live line that a pipe never sees. Looks like a dead board; isn't.
+  Use `python -u` when piping.
 
-## Future: BLE
-
-`SensorHub` and `feather_protocol.encode` are transport-free, so a future
-`ble_stream.py` can reuse both and only swap the sink (e.g. a Nordic UART or the
-Adafruit BLE sensor service — `adafruit_ble` / `adafruit_ble_adafruit` are in the
-bundle) for the `sys.stdout.buffer.write` call in `code.py`.
