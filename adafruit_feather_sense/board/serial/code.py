@@ -1,9 +1,10 @@
 """Feather Sense USB serial telemetry (CircuitPython entry point).
 
-Streams every onboard sensor over USB serial as COBS-framed TLV records (see
+Streams the board's raw motion sensors (acceleration, angular rate, magnetic
+field) plus battery state over USB serial as COBS-framed TLV records (see
 ``feather_protocol``), using the shared ``Telemetry`` sampling loop. Each sample
-is an independent frame, so fast motion data and slow environmental data coexist
-on one link without bundling.
+is an independent frame, so streams at different rates coexist on one link
+without bundling.
 
 Deploy (USB serial build): copy this file as ``code.py`` plus ``feather_protocol.py``,
 ``sensors.py`` and ``telemetry.py`` to the CIRCUITPY drive root. Read it on the

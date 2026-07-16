@@ -1,7 +1,8 @@
 """Feather Sense BLE telemetry (CircuitPython entry point).
 
-Streams the same COBS-framed TLV records as the USB serial build, but over the
-**Nordic UART Service** (a BLE "serial pipe") instead of USB. The board
+Streams the same COBS-framed TLV records as the USB serial build (raw motion +
+battery), but over the **Nordic UART Service** (a BLE "serial pipe") instead of
+USB. The board
 advertises as ``FeatherSense``; a host connects and subscribes to the UART TX
 characteristic. The wire protocol is identical, so the host decodes it with the
 same ``FrameDecoder`` (see ``ble_stream.py`` / ``read_ble.py``).

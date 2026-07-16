@@ -1,5 +1,10 @@
 """Shared wire protocol for the Feather Sense sensor stream.
 
+The board streams only **raw** sensor samples (acceleration, angular rate,
+magnetic field, battery); anything derivable from those is reconstructed on the
+host (see ``motion.py``) rather than sent, so the device's loop budget goes to
+sampling. See :data:`MSG_INFO` for the live types.
+
 One sensor sample = one *frame*. A frame is a Type-Length-Value (TLV) record,
 COBS-encoded, terminated by a single ``0x00`` delimiter::
 
@@ -29,15 +34,25 @@ import struct
 
 # --- Message types -----------------------------------------------------------
 # Data values are scaled int32 (see SCALES); the battery's usb flag is a u8.
+#
+# Codes are assigned densely and carry no compatibility guarantee: the board and
+# the host ship from this one file, so a renumbering is resolved by reflashing.
+# (Recordings are unaffected — /feather groups are keyed by stream *name*, not by
+# type code.) The env/altitude types of the removed BMP280/SHT31-D sensing are
+# gone rather than reserved; if you re-add a stream, append the next free code.
 MSG_ACCEL = 0x01     # 3 x i32: x, y, z            (m/s^2  * 1000)
 MSG_GYRO = 0x02      # 3 x i32: x, y, z            (rad/s  * 10000)
 MSG_MAG = 0x03       # 3 x i32: x, y, z            (uT     * 100)
-MSG_ENV = 0x04       # 3 x i32: temperature, humidity, pressure (C, %RH, hPa; * 100)
-MSG_ALTITUDE = 0x05  # 1 x i32: altitude           (m      * 1000)
-MSG_BATTERY = 0x06   # 2 x i32 + 1 x u8: voltage(mV), percent(*100), usb_connected
-MSG_ERROR = 0x07     # u8 source-type + UTF-8 text: a caught sampling/encode failure
-MSG_GRAVITY = 0x08   # 3 x i32: x, y, z    (m/s^2 * 1000) — estimated gravity vector
-MSG_LINEAR_ACCEL = 0x09  # 3 x i32: x, y, z (m/s^2 * 1000) — acceleration with gravity removed
+MSG_BATTERY = 0x04   # 2 x i32 + 1 x u8: voltage(mV), percent(*100), usb_connected
+MSG_ERROR = 0x05     # u8 source-type + UTF-8 text: a caught sampling/encode failure
+
+# Host-derived pseudo-types. These are **never put on the wire** — the board
+# streams raw MSG_ACCEL only, and the host reconstructs both from it (see
+# motion.py). They exist so derived samples can flow through the same
+# SensorRecord/naming machinery as decoded ones; they have no SCALES entry
+# because they are built directly in SI units, never encoded as fixed point.
+MSG_GRAVITY = 0x06       # 3 x float: x, y, z — estimated gravity vector
+MSG_LINEAR_ACCEL = 0x07  # 3 x float: x, y, z — acceleration with gravity removed
 
 # Human-readable name + field labels per type, for host-side formatting.
 # `battery` carries a trailing u8 (usb_connected) after its two scaled ints;
@@ -46,8 +61,6 @@ MSG_INFO = {
     MSG_ACCEL: ("accel", ("x", "y", "z")),
     MSG_GYRO: ("gyro", ("x", "y", "z")),
     MSG_MAG: ("mag", ("x", "y", "z")),
-    MSG_ENV: ("env", ("temperature_c", "humidity_pct", "pressure_hpa")),
-    MSG_ALTITUDE: ("altitude", ("altitude_m",)),
     MSG_BATTERY: ("battery", ("voltage_v", "percent", "usb_connected")),
     MSG_ERROR: ("error", ("source", "message")),
     MSG_GRAVITY: ("gravity", ("x", "y", "z")),
@@ -56,16 +69,12 @@ MSG_INFO = {
 
 # Fixed-point scale per scaled int32 field: SI value = raw_int / scale.
 # Ranges stay well within int32. Fields not listed here (battery usb flag,
-# error message) are passed through unscaled.
+# error message, the host-derived gravity/linear_accel) pass through unscaled.
 SCALES = {
     MSG_ACCEL: (1000, 1000, 1000),        # milli-m/s^2         -> 0.001 m/s^2
     MSG_GYRO: (10000, 10000, 10000),      # 1e-4 rad/s
     MSG_MAG: (100, 100, 100),             # 0.01 uT
-    MSG_ENV: (100, 100, 100),             # 0.01 C, 0.01 %RH, 0.01 hPa
-    MSG_ALTITUDE: (1000,),                # millimetre
     MSG_BATTERY: (1000, 100),             # millivolt, 0.01 %
-    MSG_GRAVITY: (1000, 1000, 1000),      # milli-m/s^2
-    MSG_LINEAR_ACCEL: (1000, 1000, 1000),  # milli-m/s^2
 }
 
 # NB: use struct.pack/unpack (functions), not struct.Struct — CircuitPython's

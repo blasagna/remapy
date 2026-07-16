@@ -21,12 +21,17 @@ Layout::
     /pose/presence        (N, 33)      float32
 
 An optional ``/feather/<stream>`` group per Feather Sense stream (accel, gyro,
-mag, gravity, linear_accel, env, altitude, battery, error) may also be present
-when that device was streaming over USB serial. Each holds its own
-``timestamps_ms`` (device clock) plus an ``(M, K)`` float32 ``values`` dataset
-(or ``source``/``message`` string columns for ``error``), grown independently
-since the streams are asynchronous and multi-rate. Written via
-:meth:`HDF5Recorder.append_sensor`, read back via ``recording.reader.Recording.feather``.
+mag, battery, error) may also be present when that device was streaming. Each
+holds its own ``timestamps_ms`` (device clock) plus an ``(M, K)`` float32
+``values`` dataset (or ``source``/``message`` string columns for ``error``),
+grown independently since the streams are asynchronous and multi-rate. Written
+via :meth:`HDF5Recorder.append_sensor`, read back via
+``recording.reader.Recording.feather``.
+
+Consistent with the minimal-raw rule above, only what the board actually samples
+is stored: ``gravity``/``linear_accel`` are derived from the raw ``accel`` on
+read (see ``adafruit_feather_sense.motion``), so their filter time constant stays
+re-tunable after capture.
 
 An optional ``/annotations`` group (labeled time segments) may be added *after*
 recording by ``recording.annotations.AnnotationStore``; it is absent here.

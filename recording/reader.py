@@ -57,6 +57,12 @@ class Recording:
         Numeric streams expose ``timestamps_ms``, ``values`` (M, K) and
         ``fields``; the ``error`` stream exposes ``timestamps_ms``, ``source``
         and ``message`` string arrays. Empty dict when no device was recorded.
+
+        ``gravity`` and ``linear_accel`` are **not stored** — the board streams
+        raw accel only. They are derived here at the default time constant and
+        added to the dict (each flagged ``derived=True``), so consumers see the
+        same streams as before. Use :meth:`motion` to re-derive with a different
+        time constant.
         """
         if "feather" not in self._f:
             return {}
@@ -68,14 +74,51 @@ class Recording:
                 s.decode() if isinstance(s, bytes) else str(s)
                 for s in g.attrs.get("fields", [])
             ]
-            ns = SimpleNamespace(timestamps_ms=g["timestamps_ms"][:], fields=fields)
+            ns = SimpleNamespace(timestamps_ms=g["timestamps_ms"][:], fields=fields, derived=False)
             if name == "error":
                 ns.source = np.array([_decode(s) for s in g["source"][:]])
                 ns.message = np.array([_decode(s) for s in g["message"][:]])
             else:
                 ns.values = g["values"][:]
             out[name] = ns
+        out.update(self._derive_motion(out))
         return out
+
+    def _derive_motion(self, streams: dict, tau_s: float | None = None) -> dict:
+        """Reconstruct gravity / linear_accel from a loaded raw ``accel`` stream.
+
+        Returns ``{}`` when the recording has no accel data (nothing to derive
+        from), including recordings made before the device was wired up.
+        """
+        from adafruit_feather_sense.motion import GRAVITY_TAU_S, derive_motion
+
+        accel = streams.get("accel")
+        if accel is None or accel.timestamps_ms.shape[0] == 0:
+            return {}
+        gravity, linear = derive_motion(
+            accel.timestamps_ms,
+            accel.values,
+            GRAVITY_TAU_S if tau_s is None else tau_s,
+        )
+        return {
+            name: SimpleNamespace(
+                timestamps_ms=accel.timestamps_ms,
+                values=np.asarray(vals, dtype=np.float32),
+                fields=["x", "y", "z"],
+                derived=True,
+            )
+            for name, vals in (("gravity", gravity), ("linear_accel", linear))
+        }
+
+    def motion(self, tau_s: float | None = None) -> dict:
+        """Re-derive ``gravity`` / ``linear_accel`` with a custom time constant.
+
+        ``self.feather`` already carries both at the default
+        ``motion.GRAVITY_TAU_S``; this recomputes them from the same stored raw
+        accel for a different ``tau_s`` (larger = steadier gravity, slower to
+        follow reorientation). Returns ``{}`` if the recording has no accel.
+        """
+        return self._derive_motion(self.feather, tau_s)
 
     def __len__(self) -> int:
         return int(self.timestamps_ms.shape[0])

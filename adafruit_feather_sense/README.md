@@ -1,10 +1,14 @@
 # Adafruit Feather Sense — sensor telemetry
 
-A CircuitPython application that samples every onboard sensor of the
-**Adafruit Feather Bluefruit Sense (nRF52840)** and streams the readings over
-USB serial, plus a host-side `pyserial` reader. Transport starts as USB serial;
-the protocol and sensor layers are transport-agnostic so a BLE transport can be
-added later without touching them.
+A CircuitPython application that samples the **raw motion sensors** of the
+**Adafruit Feather Bluefruit Sense (nRF52840)** and streams the readings over USB
+serial or BLE, plus host-side readers. The protocol and sensor layers are
+transport-agnostic; both transports are interchangeable.
+
+The board sends **only what it measures** — acceleration, angular rate, magnetic
+field, battery. Anything derivable from those (gravity, linear acceleration) is
+reconstructed on the host, so the device's loop budget goes to sampling. See
+[Derived motion](#derived-motion-gravity--linear_accel).
 
 - Board guide: https://learn.adafruit.com/adafruit-feather-sense/
 - Board: `feather_bluefruit_sense`, CircuitPython **10.2.1**, mounted at `/media/bob/CIRCUITPY`.
@@ -18,8 +22,6 @@ All sensors sit on the board's internal I2C bus (`board.SCL`/`board.SDA`).
 | Acceleration | LSM6DS33 **or** LSM6DS3TR-C | `adafruit_lsm6ds` | m/s² |
 | Angular rate | (same IMU) | `adafruit_lsm6ds` | rad/s |
 | Magnetic field | LIS3MDL | `adafruit_lis3mdl` | µT |
-| Temperature / Pressure / Altitude | BMP280 | `adafruit_bmp280` | °C / hPa / m |
-| Humidity | SHT31-D | `adafruit_sht31d` | %RH |
 | Battery / power state | `board.VOLTAGE_MONITOR`, `supervisor` | (stdlib) | V / % / bool |
 
 **IMU chip note:** Adafruit swapped the LSM6DS33 for the pin-compatible
@@ -30,6 +32,17 @@ crude linear LiPo estimate (3.2 V → 0 %, 4.2 V → 100 %).
 
 *Not sampled:* the APDS9960 (light/color/gesture/proximity) and the PDM
 microphone. Both are easy to add later as new message types.
+
+**Environmental sensing was removed** (BMP280 temperature/pressure/altitude,
+SHT31-D humidity). Those chips only answer a *forced-mode conversion* — a
+blocking ~45 ms per BMP280 read — and `env` + `altitude` together stalled the
+loop for **~152 ms of every second** (~15 % of the wall clock, ~7.6 lost IMU
+samples/s) to serve 1 Hz data nothing downstream consumed. Removing them took the
+IMU from 41 Hz to **48.3 Hz** (measured). If you re-add them: put the BMP280 in
+`MODE_NORMAL` (it then converts continuously in the background and a read becomes
+a ~1 ms register fetch), lower `overscan_pressure` from the `X16` default, and
+derive altitude from the `env` pressure on the host rather than paying a second
+conversion for it.
 
 ## Wire protocol — TLV over COBS
 
@@ -60,12 +73,20 @@ next delimiter resyncs the stream (self-synchronising framing).
 | `0x01` | accel | 3×i32 (x, y, z) — **total, includes gravity** | 1000 → m/s² |
 | `0x02` | gyro | 3×i32 (x, y, z) | 10000 → rad/s |
 | `0x03` | mag | 3×i32 (x, y, z) | 100 → µT |
-| `0x04` | env | 3×i32 (temp, humidity, pressure) | 100 → °C, %RH, hPa |
-| `0x05` | altitude | 1×i32 (altitude) | 1000 → m |
-| `0x06` | battery | 2×i32 (voltage, percent) + 1×u8 (usb) | 1000 → V, 100 → % |
-| `0x07` | error | u8 source-type + UTF-8 text | — (not scaled) |
-| `0x08` | gravity | 3×i32 (x, y, z) — estimated gravity vector | 1000 → m/s² |
-| `0x09` | linear_accel | 3×i32 (x, y, z) — gravity removed | 1000 → m/s² |
+| `0x04` | battery | 2×i32 (voltage, percent) + 1×u8 (usb) | 1000 → V, 100 → % |
+| `0x05` | error | u8 source-type + UTF-8 text | — (not scaled) |
+| `0x06`† | gravity | 3×float (x, y, z) — **host-derived, never on the wire** | — (built in SI) |
+| `0x07`† | linear_accel | 3×float (x, y, z) — **host-derived, never on the wire** | — (built in SI) |
+
+† `0x06`/`0x07` are *pseudo-types*: no board ever transmits them. They exist so
+host-derived samples (see [`motion.py`](motion.py)) flow through the same
+`SensorRecord`/naming machinery as decoded ones, and so have no `SCALES` entry.
+
+**Codes carry no compatibility guarantee.** They are assigned densely, and the
+board and host ship from this one file — so a renumbering is resolved by
+reflashing, and the retired env/altitude types were deleted rather than reserved.
+Recordings are unaffected either way: `/feather` groups are keyed by stream
+*name*, not by type code. If you add a stream, append the next free code.
 
 `timestamp_ms` = `time.monotonic_ns() // 1_000_000` (u32, wraps ≈ 49.7 days).
 No CRC — COBS framing + reliable USB CDC is sufficient; a CRC could be added as a
@@ -77,17 +98,40 @@ type byte and the exception text (`source=mag  OSError: ...`) instead of silentl
 dropping the sample. Other streams keep flowing. The reader prints these inline
 and counts them under `--stats`.
 
-**Acceleration decomposition (`accel` / `gravity` / `linear_accel`):** the
-LSM6DS is a raw IMU with no on-chip fusion, so it only reports *total*
+## Derived motion (`gravity` / `linear_accel`)
+
+The LSM6DS is a raw IMU with no on-chip fusion, so it only reports *total*
 acceleration (`accel`, which includes gravity — ~9.8 m/s² on one axis at rest).
-`SensorHub.read_motion()` does one accelerometer read per sample and derives two
-more streams from it: `gravity`, a single-pole low-pass estimate of the gravity
-vector (time constant `_GRAVITY_TAU_S`, filter coefficient adapts to the real
-loop `dt`), and `linear_accel = accel − gravity`, the motion-only component
-(≈ 0 at rest). All three share one timestamp. This is a lightweight estimate:
-sustained (non-transient) linear acceleration slowly bleeds into the gravity
-estimate; a gyro-fused orientation filter (e.g. Madgwick/Mahony) would remove
-that at more compute cost — a possible future improvement.
+The two useful decompositions are derived **on the host** by
+[`motion.py`](motion.py) from that one raw stream:
+
+- `gravity` — a single-pole low-pass estimate of the gravity vector
+  (`GRAVITY_TAU_S`; the filter coefficient adapts to the real sample `dt`),
+- `linear_accel` — `accel − gravity`, the motion-only component (≈ 0 at rest).
+
+`GravityFilter.update(timestamp_ms, xyz)` drives the live path (the rerun
+viewer); `derive_motion(timestamps, values, tau_s)` does a whole recorded stream
+at once. The filter is a sequential IIR, so it is a loop by construction and does
+not vectorise.
+
+**Why the host and not the board?** It used to run in `SensorHub.read_motion()`,
+which made one accelerometer read cost *three* encoded frames (`accel` +
+`gravity` + `linear_accel`) — and `encode` is the single most expensive step in
+the loop at ~1.275 ms/frame. Moving it off the board removed two of every four
+frames per cycle. It also buys accuracy and flexibility:
+
+- **Timing.** The filter now keys off the *device* timestamp rather than the
+  board's `time.monotonic()` at read, so it sees the true sample spacing.
+- **Re-tunable.** `tau_s` becomes a read-time choice. `Recording.motion(tau_s=…)`
+  re-derives an existing recording with a different constant — impossible once a
+  filter is baked into the capture. This is the same rule the recorder follows
+  for joint angles: store the minimal raw signal, recompute the rest on read.
+
+Accuracy caveat (unchanged): this is a lightweight estimate. Sustained
+(non-transient) linear acceleration slowly bleeds into the gravity estimate; a
+gyro-fused orientation filter (e.g. Madgwick/Mahony) would remove that at more
+compute cost — cheaper to reconsider now that it runs on a host CPU rather than
+an nRF52840.
 
 ## Transports
 
@@ -107,8 +151,9 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 | File | Runs on | Purpose |
 |------|---------|---------|
 | [`feather_protocol.py`](feather_protocol.py) | board **+** host | TLV encode/decode, COBS, `FrameDecoder` |
-| [`sensors.py`](sensors.py) | board | `SensorHub` — inits all sensors, one read method per stream |
+| [`sensors.py`](sensors.py) | board | `SensorHub` — inits the raw sensors, one read method per stream |
 | [`telemetry.py`](telemetry.py) | board | `Telemetry.pump(now, emit)` — the shared sample/schedule/encode loop (rates configurable) |
+| [`motion.py`](motion.py) | host | `GravityFilter` / `derive_motion` — gravity + linear_accel from raw accel |
 | [`board/serial/code.py`](board/serial/code.py) | board | USB serial entry: `emit = sys.stdout.buffer.write`, full rates |
 | [`board/ble/code.py`](board/ble/code.py) | board | BLE entry: Nordic UART peripheral (`FeatherSense`), `emit = uart.write`, reduced rates |
 | [`stream.py`](stream.py) | host | serial `FeatherSenseStream` + shared `FrameRecordDecoder` (bytes→SI records) |
@@ -120,28 +165,72 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 ## Sample rates
 
 Rates are `Telemetry(...)` constructor args, so each board build picks its own. Nominal vs.
-**measured** on the serial build (12 s capture, board at rest, CircuitPython 10.2.1):
+**measured** on the serial build (15 s capture, board at rest, CircuitPython 10.2.1):
 
-| Stream | Nominal (serial) | Measured | Nominal (BLE) |
-|--------|------------------|----------|---------------|
-| accel / gravity / linear_accel | 50 Hz (`imu_hz`) | ~41 Hz | 20 Hz |
-| gyro | 50 Hz (`imu_hz`) | ~41 Hz | 20 Hz |
-| mag | 20 Hz (`mag_hz`) | ~16 Hz | 10 Hz |
-| env / altitude | 1 Hz (`env_hz`) | 1.0 Hz | 1 Hz |
-| battery | 0.2 Hz (`battery_hz`) | 0.2 Hz | 0.2 Hz |
+| Stream | Nominal (serial) | Measured | % of nominal | Nominal (BLE) |
+|--------|------------------|----------|--------------|---------------|
+| accel | 50 Hz (`imu_hz`) | **48.8 Hz** | 97.5 % | 20 Hz |
+| gyro | 50 Hz (`imu_hz`) | **48.8 Hz** | 97.5 % | 20 Hz |
+| mag | 20 Hz (`mag_hz`) | **19.8 Hz** | 98.8 % | 10 Hz |
+| battery | 0.2 Hz (`battery_hz`) | 0.2 Hz | 100 % | 0.2 Hz |
 
-The IMU/mag streams land ~18–20 % under nominal: all six share one cooperative `pump()` loop, so
-each sensor's I2C read and frame encode delays whatever is due next. The slow streams hit their
-rates exactly (huge timing slack). **This is jitter in sample *spacing*, not wrong times** —
-timestamps are stamped at read, so recorded data stays accurate.
+How it got there — each step measured on the board:
 
-One accelerometer read fans out into **three** frames sharing a timestamp (`accel`, `gravity`,
-`linear_accel`), so ~41 Hz of accel sampling is ~123 frames/s on the wire; `gyro` is a separate
-read at the same `imu_hz`.
+| Change | accel | mag |
+|--------|-------|-----|
+| original (env/altitude on board, gravity+linear encoded on board, 100 kHz I2C) | 41.0 Hz | 16.0 Hz |
+| + environmental sensing removed | 48.3 Hz | 19.2 Hz |
+| + I2C at 400 kHz | **48.8 Hz** | **19.8 Hz** |
 
-To close the gap: raise `imu_hz` above 50 to compensate for loop overhead (one-line change,
-timestamps stay honest), or drop `mag_hz` to free loop time. The BLE build is deliberately slower
-(`imu_hz=20, mag_hz=10`) — `uart.write` back-pressures the loop to the ~1–2 KB/s link anyway.
+The residual ~2.5 % is the cooperative `pump()` loop: all four streams share it, so each sensor's
+I2C read and frame encode delays whatever is due next. **This is jitter in sample *spacing*, not
+wrong times** — timestamps are stamped at read, so recorded data stays accurate.
+
+The original 41 Hz was **not** loop saturation (it still slept 17 % of the time) — it was
+*blackout*. The 1 Hz `env`/`altitude` reads blocked for ~152 ms/s, and 152 ms of dead time removes
+~7.6 of the 50 accel slots per second: `848 ms / 20 ms = 42.4 Hz`, against 41 measured.
+
+**Why 400 kHz bought only +0.5 Hz.** It halves read time, but by then the loop was no longer the
+constraint — the rate is capped by `imu_hz`, and the saved time became *sleep*, not throughput.
+Its real value is **headroom**: the loop went from 17 % idle (original) to **58 % idle**, with
+`pump()` busy only ~4.9 s of every 12. That is the budget to raise `imu_hz`, add streams, or
+absorb a slower transport — not a bigger number on this table.
+
+To go past 50 Hz you must raise `imu_hz` itself (there is now room); it is capped by the schedule,
+not the hardware. The BLE build stays deliberately slower (`imu_hz=20, mag_hz=10`) — `uart.write`
+back-pressures the loop to the ~1–2 KB/s link regardless.
+
+### Where the loop time goes
+
+Measured per phase on the board — useful before optimising the wrong thing:
+
+| Phase | Cost | Note |
+|-------|------|------|
+| `encode` (to_raw + pack + COBS) | **1.275 ms/frame** | the most expensive step |
+| ↳ `cobs_encode` (20 B) | 0.708 ms | 56 % of encode — a pure-Python byte loop |
+| ↳ `to_raw` | 0.397 ms | 31 % of encode |
+| `imu.acceleration` | 1.420 ms @ 100 kHz | 0.772 ms @ 400 kHz (**1.84×**) |
+| `imu.gyro` | 1.566 ms @ 100 kHz | 0.879 ms @ 400 kHz (**1.78×**) |
+| `mag.magnetic` | 3.608 ms @ 100 kHz | 1.950 ms @ 400 kHz (**1.85×**) |
+| `write(1 frame, 20 B)` | 0.126 ms | USB emit is only ~2 % of wall time |
+| `write(4 frames batched)` | 0.173 ms | batching saves ~1.6 % — not worth a queue |
+
+Note the schedule's "reader" closures include their `encode`, so an in-situ `read:accel` (~2.6 ms
+at 400 kHz) is read + encode, not the bare sensor read.
+
+Three conclusions worth keeping:
+
+- **The transport is not the bottleneck.** Batching writes buys ~1.6 % of the loop. Don't bother.
+- **`encode` is.** Which is why moving the derived `gravity`/`linear_accel` frames to the host
+  mattered: it deleted two of every four frames per cycle. If more is ever needed, `cobs_encode`
+  is a pure-Python per-byte loop and the obvious next target.
+- **A faster read only helps while the loop is the constraint.** 400 kHz was worth ~1.8× per read
+  but only +0.5 Hz, because by then `imu_hz` was the cap. It bought idle, not rate.
+
+Reproduce any of this by timing phases on the board with a temporary `code.py` (loop each phase a
+few hundred times — CircuitPython's monotonic clock ticks at only ~1024 Hz, so a single read is
+unmeasurable), or instrument the real loop by wrapping the `Telemetry._schedule` reader slots and
+the emit sink, then subtracting: `wall = reads + emit + pump overhead + sleep`.
 
 ### Why not interrupts?
 
@@ -169,20 +258,21 @@ routes the IMU's INT1 to a GPIO at all (check `dir(board)` at the REPL).
 Install the sensor drivers to the board with `circup` (from the repo root):
 
 ```bash
-pixi run circup install adafruit_lsm6ds adafruit_lis3mdl adafruit_sht31d adafruit_bmp280
+pixi run circup install adafruit_lsm6ds adafruit_lis3mdl
 ```
 
 `adafruit_bus_device` and `adafruit_register` are pulled in automatically.
 Resulting `pixi run circup freeze` on the board:
 
 ```
-adafruit_bmp280==3.3.12
 adafruit_lis3mdl==1.2.8
-adafruit_sht31d==2.3.31
 adafruit_bus_device==5.2.17
 adafruit_lsm6ds==4.6.3
 adafruit_register==1.11.3
 ```
+
+`adafruit_bmp280` / `adafruit_sht31d` are **no longer needed** (environmental sensing was
+removed); delete them from the board's `lib/` if present.
 
 Then copy the shared modules plus the **chosen transport's** `code.py` to the CIRCUITPY drive
 root (the board auto-reloads and starts streaming):
@@ -196,7 +286,8 @@ pixi run circup install adafruit_ble
 cp feather_protocol.py sensors.py telemetry.py board/ble/code.py /media/bob/CIRCUITPY/ && sync
 ```
 
-Only one `code.py` runs at a time; swap builds by re-copying the other transport's `code.py`.
+**Do not copy `motion.py`** — it is host-only, like `stream.py`/`read_stream.py`. Only one
+`code.py` runs at a time; swap builds by re-copying the other transport's `code.py`.
 
 **Eject cleanly — CIRCUITPY corrupts easily.** Unplugging the board without unmounting can leave
 the FAT filesystem damaged (CircuitPython drives are unusually prone to this when yanked
@@ -252,16 +343,17 @@ pixi run python adafruit_feather_sense/read_ble.py --stats
 pixi run python adafruit_feather_sense/read_ble.py --address AA:BB:CC:DD:EE:FF
 ```
 
-Example decoded output (board at rest, on USB power):
+Example decoded output (board at rest, on USB power) — the raw wire streams:
 
 ```
-accel     x=0.024  y=0.564  z=9.870      # z ≈ g, board flat
+accel     x=0.024  y=0.564  z=9.870      # z ≈ g, board flat (gravity included)
 gyro      x=0.060  y=-0.053 z=-0.056     # ≈ 0, stationary
 mag       x=-35.94 y=25.17  z=-28.97
-env       temperature_c=26.36  humidity_pct=43.83  pressure_hpa=1004.34
-altitude  altitude_m=74.41
 battery   voltage_v=4.103  percent=90.27  usb_connected=1
 ```
+
+`gravity` / `linear_accel` are absent here by design — the readers print what the board sends;
+the apps derive those two (see [Derived motion](#derived-motion-gravity--linear_accel)).
 
 ## Host library & app integration
 
@@ -273,7 +365,25 @@ without blocking:
 - `open_if_available(...)` probes for a real frame and returns the stream, or `None` when the
   device is absent — so callers run with or without the board.
 - `FrameRecordDecoder` (in [`stream.py`](stream.py)) is the shared bytes→records decode used by
-  both `FeatherSenseStream` (serial) and `FeatherSenseBLEStream` (BLE).
+  both `FeatherSenseStream` (serial) and `FeatherSenseBLEStream` (BLE). It decodes **only what
+  arrives** — it does not synthesize the derived streams, so a recorder fed from it stores raw
+  signals only.
+
+**Deriving gravity / linear_accel.** Each consumer applies [`motion.py`](motion.py) itself, at the
+point that suits it:
+
+| Consumer | How | Result |
+|----------|-----|--------|
+| `rerun_viewer` (live) | one `GravityFilter` per logger, fed each `accel` record | derived plots alongside the raw ones |
+| `recording` (capture) | — | stores **raw accel only** |
+| `recording.reader.Recording` (offline) | `derive_motion` over the stored accel | `feather["gravity"]` / `["linear_accel"]`, flagged `derived=True` |
+
+```python
+with Recording("session.h5") as r:
+    r.feather["accel"]         # stored, derived=False
+    r.feather["gravity"]       # derived on read at motion.GRAVITY_TAU_S
+    r.motion(tau_s=0.1)        # re-derive from the same raw accel, steadier/faster
+```
 
 `open_feather(transport, *, port=None, address=None)` in [`__init__.py`](__init__.py) picks the
 backend (lazy-importing bleak/pyserial). The **rerun viewer** and **HDF5 recorder** apps use it —

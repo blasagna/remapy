@@ -23,38 +23,25 @@ class Telemetry:
     """Sample the sensors on schedule and emit COBS-framed TLV records.
 
     Sample rates are constructor args so a bandwidth-limited transport (BLE) can
-    run slower than USB serial. Each sample is one frame (accel emits three
-    time-aligned frames: total / gravity / linear).
+    run slower than USB serial. Each sample is one frame.
+
+    Only raw signals are sampled — gravity and linear acceleration are derived
+    downstream on the host (see ``motion.py``), so one accelerometer read costs
+    one frame rather than three.
     """
 
-    def __init__(self, hub=None, imu_hz=50, mag_hz=20, env_hz=1, battery_hz=0.2):
+    def __init__(self, hub=None, imu_hz=50, mag_hz=20, battery_hz=0.2):
         self._hub = hub if hub is not None else SensorHub()
         hub = self._hub
 
         def accel():
-            # One accelerometer read decomposed into three time-aligned frames:
-            # total (includes gravity), estimated gravity, and linear (motion).
-            ts = _now_ms()
-            total, gravity, linear = hub.read_motion()
-            return (
-                fp.encode(fp.MSG_ACCEL, ts, fp.to_raw(fp.MSG_ACCEL, total)),
-                fp.encode(fp.MSG_GRAVITY, ts, fp.to_raw(fp.MSG_GRAVITY, gravity)),
-                fp.encode(fp.MSG_LINEAR_ACCEL, ts, fp.to_raw(fp.MSG_LINEAR_ACCEL, linear)),
-            )
+            return fp.encode(fp.MSG_ACCEL, _now_ms(), fp.to_raw(fp.MSG_ACCEL, hub.read_accel()))
 
         def gyro():
             return fp.encode(fp.MSG_GYRO, _now_ms(), fp.to_raw(fp.MSG_GYRO, hub.read_gyro()))
 
         def mag():
             return fp.encode(fp.MSG_MAG, _now_ms(), fp.to_raw(fp.MSG_MAG, hub.read_mag()))
-
-        def env():
-            return fp.encode(fp.MSG_ENV, _now_ms(), fp.to_raw(fp.MSG_ENV, hub.read_env()))
-
-        def altitude():
-            return fp.encode(
-                fp.MSG_ALTITUDE, _now_ms(), fp.to_raw(fp.MSG_ALTITUDE, (hub.read_altitude(),))
-            )
 
         def battery():
             v, pct, usb = hub.read_battery()
@@ -67,8 +54,6 @@ class Telemetry:
             [1.0 / imu_hz, 0.0, accel, fp.MSG_ACCEL],
             [1.0 / imu_hz, 0.0, gyro, fp.MSG_GYRO],
             [1.0 / mag_hz, 0.0, mag, fp.MSG_MAG],
-            [1.0 / env_hz, 0.0, env, fp.MSG_ENV],
-            [1.0 / env_hz, 0.0, altitude, fp.MSG_ALTITUDE],
             [1.0 / battery_hz, 0.0, battery, fp.MSG_BATTERY],
         ]
 

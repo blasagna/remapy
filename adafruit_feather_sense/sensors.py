@@ -1,23 +1,31 @@
 """Onboard sensor access for the Adafruit Feather Bluefruit Sense (nRF52840).
 
-`SensorHub` initialises every sensor on the board's internal I2C bus and exposes
-one read method per data stream. It intentionally holds *no* protocol/transport
-knowledge, so the same hub can back the USB serial stream today and a BLE
-transport later.
+`SensorHub` initialises the motion sensors on the board's internal I2C bus and
+exposes one read method per data stream. It intentionally holds *no*
+protocol/transport knowledge, so the same hub backs the USB serial stream and
+the BLE transport.
+
+Only **raw** signals are read here — acceleration, angular rate, magnetic field
+and battery state. Two deliberate omissions:
+
+- *Derived motion* (the gravity vector and linear acceleration) is computed on
+  the host (see ``motion.py``), so the loop budget goes to sampling rather than
+  filtering, and the filter's time constant stays a read-time choice.
+- *Environmental sensing* (BMP280 temperature/pressure/altitude, SHT31-D
+  humidity) was removed: those chips only answer a forced-mode conversion, which
+  blocked the loop for ~150 ms of every second — ~15 % of the wall clock, and
+  ~7.6 lost IMU samples per second — to serve 1 Hz data this project does not
+  use. Re-adding them means putting the BMP280 in ``MODE_NORMAL`` first.
 
 Runs only on the board (imports `board`, `busio`, `analogio`, `supervisor`).
 """
-
-import time
 
 import analogio
 import board
 import busio
 import supervisor
 
-import adafruit_bmp280
 import adafruit_lis3mdl
-import adafruit_sht31d
 
 # The Feather Sense shipped with the LSM6DS33 originally and the pin-compatible
 # LSM6DS3TR-C from Jan 2024 onward. Try the former, fall back to the latter.
@@ -28,17 +36,15 @@ from adafruit_lsm6ds.lsm6ds3trc import LSM6DS3TRC
 _BATT_EMPTY_V = 3.2
 _BATT_FULL_V = 4.2
 
-# Time constant (seconds) of the low-pass filter that estimates the gravity
-# vector from raw acceleration. Larger = steadier gravity, slower to follow a
-# reorientation; smaller = follows tilt faster but leaks more motion into it.
-_GRAVITY_TAU_S = 0.5
-
 
 class SensorHub:
     """Owns the I2C bus and every sensor; provides per-stream reads."""
 
     def __init__(self):
-        self.i2c = busio.I2C(board.SCL, board.SDA)
+        # busio.I2C defaults to 100 kHz; both chips here run fast mode. Measured
+        # ~1.8x on every read (accel 1.42 -> 0.77 ms, gyro 1.57 -> 0.88 ms, mag
+        # 3.61 -> 1.95 ms), which is the cheapest throughput win available.
+        self.i2c = busio.I2C(board.SCL, board.SDA, frequency=400_000)
 
         # IMU: accelerometer + gyroscope (same chip, two data streams).
         try:
@@ -49,51 +55,18 @@ class SensorHub:
             self.imu_model = "LSM6DS3TRC"
 
         self.magnetometer = adafruit_lis3mdl.LIS3MDL(self.i2c)
-        self.humidity = adafruit_sht31d.SHT31D(self.i2c)
-        self.barometer = adafruit_bmp280.Adafruit_BMP280_I2C(self.i2c)
-        # Sea-level pressure used to derive altitude; adjust to local QNH for
-        # an accurate absolute altitude.
-        self.barometer.sea_level_pressure = 1013.25
 
         self._battery = analogio.AnalogIn(board.VOLTAGE_MONITOR)
 
-        # Gravity-vector estimate state (see read_motion / _GRAVITY_TAU_S).
-        self._gravity = None
-        self._gravity_t = None
-
     # --- IMU -----------------------------------------------------------------
     def read_accel(self):
-        """(x, y, z) total acceleration in m/s^2 (includes gravity)."""
-        return self.imu.acceleration
+        """(x, y, z) total acceleration in m/s^2.
 
-    def read_motion(self):
-        """Read the accelerometer once and decompose it.
-
-        Returns ``(total, gravity, linear)``, each an (x, y, z) tuple in m/s^2:
-
-        - ``total``   — the raw accelerometer output (includes gravity),
-        - ``gravity`` — a low-pass estimate of the gravity vector,
-        - ``linear``  — ``total - gravity`` (acceleration from actual motion).
-
-        The LSM6DS does no on-chip fusion, so gravity is estimated here with a
-        single-pole low-pass filter whose coefficient adapts to the real elapsed
-        time between calls (robust to the variable loop rate). This isolates
-        gravity well for tilt and brief motion; sustained linear acceleration
-        will slowly bleed into the gravity estimate (a gyro-fused orientation
-        filter would remove that, at more cost).
+        Raw accelerometer output: this **includes gravity** (~9.8 m/s^2 on one
+        axis at rest), since the LSM6DS does no on-chip fusion. The host splits
+        it into gravity + linear components (see ``motion.py``).
         """
-        total = self.imu.acceleration
-        now = time.monotonic()
-        if self._gravity is None:
-            self._gravity = list(total)
-        else:
-            dt = now - self._gravity_t
-            alpha = dt / (_GRAVITY_TAU_S + dt) if dt > 0 else 0.0
-            self._gravity = [g + alpha * (t - g) for g, t in zip(self._gravity, total)]
-        self._gravity_t = now
-        gravity = tuple(self._gravity)
-        linear = tuple(t - g for t, g in zip(total, gravity))
-        return total, gravity, linear
+        return self.imu.acceleration
 
     def read_gyro(self):
         """(x, y, z) angular rate in rad/s."""
@@ -103,23 +76,6 @@ class SensorHub:
     def read_mag(self):
         """(x, y, z) magnetic field in microtesla."""
         return self.magnetometer.magnetic
-
-    # --- Environment ---------------------------------------------------------
-    def read_env(self):
-        """(temperature_C, relative_humidity_%, pressure_hPa).
-
-        Temperature is taken from the BMP280 (co-located with the pressure
-        reading); the SHT31-D supplies humidity.
-        """
-        return (
-            self.barometer.temperature,
-            self.humidity.relative_humidity,
-            self.barometer.pressure,
-        )
-
-    def read_altitude(self):
-        """Barometric altitude in metres (relative to `sea_level_pressure`)."""
-        return self.barometer.altitude
 
     # --- Power ---------------------------------------------------------------
     def read_battery(self):

@@ -22,6 +22,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
+from adafruit_feather_sense.motion import GravityFilter
 from pose_estimation.angles import JOINT_TRIPLETS, joint_angles
 from pose_estimation.estimator import POSE_CONNECTIONS
 
@@ -40,6 +41,8 @@ LAYOUTS = ("split", "tabs")
 # Feather Sense time-series views (added to the blueprint only when the device is
 # present). 3-axis streams share one plot (child x/y/z lines); scalar streams get
 # their own so differing magnitudes don't crush each other onto a shared axis.
+# linear_accel/gravity are derived here from the raw accel stream (see
+# log_sensors), not sent by the board.
 def _feather_grid() -> rrb.Grid:
     return rrb.Grid(
         rrb.TimeSeriesView(origin="feather/accel", name="accel (m/s²)"),
@@ -47,10 +50,6 @@ def _feather_grid() -> rrb.Grid:
         rrb.TimeSeriesView(origin="feather/gravity", name="gravity (m/s²)"),
         rrb.TimeSeriesView(origin="feather/gyro", name="gyro (rad/s)"),
         rrb.TimeSeriesView(origin="feather/mag", name="mag (µT)"),
-        rrb.TimeSeriesView(origin="feather/env/temperature_c", name="temperature (°C)"),
-        rrb.TimeSeriesView(origin="feather/env/humidity_pct", name="humidity (%RH)"),
-        rrb.TimeSeriesView(origin="feather/env/pressure_hpa", name="pressure (hPa)"),
-        rrb.TimeSeriesView(origin="feather/altitude", name="altitude (m)"),
         rrb.TimeSeriesView(origin="feather/battery/voltage_v", name="battery (V)"),
         name="Feather Sense",
     )
@@ -104,6 +103,8 @@ class PoseRerunLogger:
         # Offset mapping the device's monotonic ms clock onto the session time
         # axis, fixed on the first sensor sample so inter-sample timing is kept.
         self._sensor_offset: float | None = None
+        # The board streams raw accel only; gravity/linear are reconstructed here.
+        self._gravity_filter = GravityFilter()
         rr.init(application_id)
         # Saving and spawning are mutually exclusive sinks; spawn explicitly so we
         # can pass the viewer's in-memory store limit.
@@ -158,6 +159,9 @@ class PoseRerunLogger:
         plots keep the sensors' true relative timing and line up with the video.
         3-axis streams log child ``x/y/z`` scalars under ``feather/<name>``;
         scalar streams log under their own leaf; errors go to a text log.
+
+        Each raw ``accel`` sample additionally yields the derived ``gravity`` and
+        ``linear_accel`` plots, filtered here rather than on the board.
         """
         for rec in records:
             if self._sensor_offset is None:
@@ -172,6 +176,20 @@ class PoseRerunLogger:
             for i, value in enumerate(rec.values):
                 field = rec.fields[i] if i < len(rec.fields) else f"v{i}"
                 rr.log(f"feather/{rec.name}/{field}", rr.Scalars(float(value)))
+
+            if rec.name == "accel":
+                self._log_derived_motion(rec)
+
+    def _log_derived_motion(self, accel_rec) -> None:
+        """Log gravity / linear_accel derived from one raw accel record.
+
+        Shares the accel record's timeline position (already set by the caller),
+        so the derived plots sit exactly on their source sample.
+        """
+        gravity, linear = self._gravity_filter.update(accel_rec.timestamp_ms, accel_rec.values)
+        for name, xyz in (("gravity", gravity), ("linear_accel", linear)):
+            for field, value in zip(("x", "y", "z"), xyz):
+                rr.log(f"feather/{name}/{field}", rr.Scalars(float(value)))
 
     def _log_skeleton_2d(self, shape, landmarks) -> None:
         h, w = shape[:2]

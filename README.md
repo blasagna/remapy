@@ -50,6 +50,8 @@ for motor-development metrics:
 - [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
 - [ ] measure streaming throughput compared to nominal sampling rates
 - [ ] baseline IMU signal stats at rest
+- [ ] set LED color to show battery level high, mid, or low.
+- [ ] use embedded system with real hardware interrupts - rpi pico 2w with external sensors.
 - [ ] port to Android 
 - [ ] consider multiple camera views
 - [ ] consider adding a depth camera

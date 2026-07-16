@@ -110,8 +110,9 @@ Streams the pipeline to the [Rerun](https://rerun.io) viewer.
   / `--record-video PATH.mp4` (write an HDF5 recording alongside — see `recording/`). Spawns
   the viewer by default.
 - **Feather Sense (optional):** when the board is streaming (USB serial **or BLE**), the viewer
-  also plots its sensors on a **"Feather Sense" tab** (accel/gyro/mag/gravity/linear_accel as x/y/z
-  line plots, plus env/altitude/battery). The stream is obtained via
+  also plots its sensors on a **"Feather Sense" tab** (accel/gyro/mag as x/y/z line plots, plus
+  battery; `gravity`/`linear_accel` are **derived here** from each raw `accel` record via a
+  `GravityFilter` — the board does not send them). The stream is obtained via
   `adafruit_feather_sense.open_feather(...)`: `--feather` requires the device (errors if absent),
   `--no-feather` disables the probe, default is **auto** (used only if detected);
   `--feather-transport {serial,ble}` (default serial), `--feather-port` (serial) /
@@ -140,11 +141,17 @@ Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are re
   since streams are async/multi-rate. `recording/main.py` gains the same feather flags as the
   rerun CLI (`--feather` / `--no-feather` / `--feather-transport {serial,ble}` / `--feather-port`
   / `--feather-address`). Read back via `Recording.feather` (identical regardless of transport).
+  Only the board's **raw** streams are stored (accel/gyro/mag/battery/error) — per the minimal-raw
+  rule, `gravity`/`linear_accel` are derived on read, never written.
 - `reader.py` — `Recording`, a read-only loader exposing arrays (`landmarks_world`, etc.),
   `pose_present`, `fps()`, `frame(i)` (JPEG-decoded), `angles()` (recomputed via
   `pose_estimation.angles.joint_angles`, returned as a pandas DataFrame), `annotations` (a
   read-only snapshot of any labeled time segments, `[]` on recordings without them), and
   `feather` (a `{stream: arrays}` dict of any recorded Feather Sense data, `{}` if none).
+  `feather` additionally carries `gravity`/`linear_accel`, **derived on read** from the stored raw
+  accel via `adafruit_feather_sense.motion` (each flagged `derived=True`; same pattern as
+  `angles()`). `motion(tau_s=…)` re-derives them with a different filter time constant — the point
+  of not baking the filter into the capture.
 - `annotations.py` — `AnnotationStore`, a context manager that opens an **existing** recording
   `"r+"` to add/edit labeled **time segments** (an interval table, not per-frame). `add(label,
   start_ms, end_ms)`, `list()`, `delete(index)`; the optional `/annotations/{label,start_ms,
@@ -199,9 +206,15 @@ host-side readers. Mixed runtime: some files run on the board, some on the host,
 See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list, and deploy steps.
 
 - **On the board** (deploy = copy the shared trio + the chosen entry to the CIRCUITPY root as
-  `code.py`; libs via `circup`): `sensors.py` (`SensorHub` — IMU with LSM6DS33/TR-C fallback,
-  LIS3MDL, SHT31-D, BMP280, battery via `board.VOLTAGE_MONITOR`; `read_motion()` decomposes accel
-  into total/gravity/linear via a low-pass gravity estimate); `telemetry.py` (`Telemetry.pump(now,
+  `code.py`; libs via `circup install adafruit_lsm6ds adafruit_lis3mdl`): `sensors.py`
+  (`SensorHub` — **raw signals only**: IMU with LSM6DS33/TR-C fallback, LIS3MDL, battery via
+  `board.VOLTAGE_MONITOR`; the I2C bus is opened at **400 kHz**, not the 100 kHz `busio` default —
+  measured ~1.8× per read). Environmental sensing (BMP280 temp/pressure/altitude, SHT31-D
+  humidity) was **removed**: forced-mode conversions blocked the loop ~152 ms/s (~15 % of wall,
+  ~7.6 lost IMU samples/s) for unused 1 Hz data. Re-add only with the BMP280 in `MODE_NORMAL`.
+  Measured IMU rate: 41 Hz → 48.3 Hz (env removal) → **48.8 Hz** (400 kHz), 97.5 % of the 50 Hz
+  nominal, with the loop now **58 % idle** — headroom to raise `imu_hz`, not just a faster number.
+  Then `telemetry.py` (`Telemetry.pump(now,
   emit)` — the transport-agnostic sample/schedule/encode loop, rates are ctor args); and **two
   entry points, a literal `code.py` each**: `board/serial/code.py` (USB, `emit =
   sys.stdout.buffer.write`, full rates) and `board/ble/code.py` (Nordic UART peripheral named
@@ -210,9 +223,19 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
 - **Shared** (board + host, pure `struct`): `feather_protocol.py` — a **TLV-over-COBS** wire
   protocol. Each sample is one COBS-framed record `[type][len][timestamp_u32][int32…]`
   terminated by `0x00`; **no floats on the wire** — values are scaled fixed-point int32 (shared
-  `SCALES`), converted SI↔int by `to_raw`/`to_si`. Message types include accel/gyro/mag/env/
-  altitude/battery/gravity/linear_accel and an `error` type (streamed on any caught
-  sampling/encode failure).
+  `SCALES`), converted SI↔int by `to_raw`/`to_si`. Live types `0x01`–`0x05`: accel/gyro/mag/
+  battery + `error` (streamed on any caught sampling/encode failure). `0x06` gravity / `0x07`
+  linear_accel are **host-derived pseudo-types, never on the wire** (no `SCALES` entry — built in
+  SI). Codes are dense and carry **no compatibility guarantee** — board and host ship from this one
+  file, so renumbering is resolved by reflashing; recordings are unaffected (`/feather` groups are
+  keyed by stream *name*). Add a stream = append the next free code.
+- **Host-derived motion:** `motion.py` (host-only) — `GravityFilter.update(ts_ms, xyz)` /
+  `derive_motion(ts, values, tau_s)` reconstruct `gravity` (single-pole low-pass, `GRAVITY_TAU_S`)
+  and `linear_accel = accel − gravity` from the raw accel stream. This used to run on the board
+  (`SensorHub.read_motion`), which made one accel read cost three encoded frames; `encode` is the
+  loop's most expensive step (~1.275 ms/frame), so moving it here removed two of every four
+  frames/cycle. It also keys the filter off the *device* timestamp (true sample spacing) and makes
+  `tau_s` a read-time choice.
 - **On the host** — both transports share one interface (`poll()` → SI `SensorRecord`s, `errors`,
   `close()`, `.port`, `open_if_available`), so apps are transport-agnostic. `stream.py` —
   `FeatherSenseStream` (pyserial, non-blocking) + `FrameRecordDecoder` (the shared bytes→records
@@ -264,9 +287,12 @@ display, or GPU and runs in well under a second:
   pyserial handle (`FakeSerial`, fed pre-baked protocol bytes).
 - `tests/test_feather.py` — the Feather Sense host integration: `FeatherSenseStream` decode/poll
   and `open_if_available` probe (via `FakeSerial`), the shared `FrameRecordDecoder`, the
-  `open_feather` transport dispatch (serial/ble backends mocked — no real radio), the recorder's
-  `/feather` datasets + `Recording.feather`, and the viewer's `log_sensors` (with `rr` mocked). No
-  board, serial port, or BLE adapter needed.
+  `open_feather` transport dispatch (serial/ble backends mocked — no real radio), the host
+  `motion` derivation (`GravityFilter`/`derive_motion` — seeding, tilt bleed, transients, clock
+  wrap, batch/live agreement), the recorder's `/feather` datasets + `Recording.feather` (including
+  that derived streams are *not* stored and that `motion(tau_s=…)` re-derives), and the viewer's
+  `log_sensors` + its derived plots (with `rr` mocked). No board, serial port, or BLE adapter
+  needed.
 - `cv2.VideoCapture`/`VideoWriter` are patched; the native MediaPipe `PoseLandmarker`/
   `FaceDetector` are patched at their import site (`ensure_model` + the class) so no model loads;
   `urllib.request.urlretrieve` is patched in the `ensure_model` tests; the `rerun` SDK is patched
