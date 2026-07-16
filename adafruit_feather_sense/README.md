@@ -33,6 +33,57 @@ crude linear LiPo estimate (3.2 V → 0 %, 4.2 V → 100 %).
 *Not sampled:* the APDS9960 (light/color/gesture/proximity) and the PDM
 microphone. Both are easy to add later as new message types.
 
+## Status LED
+
+`status_led.py` lights the onboard NeoPixel by battery level, so the board reports its own
+state while untethered rather than only over the wire. It is **display only** — nothing about
+it reaches the protocol, and the host never sees it.
+
+| Band | Level | Sticky edge |
+|------|-------|-------------|
+| 🔴 red | < 25 % | must reach 28 % to leave red |
+| 🟡 yellow | 25 – 60 % | must reach 63 % to go green, drop below 22 % to go red |
+| 🟢 green | > 60 % | must drop below 57 % to go yellow |
+
+Level is read from the same `read_battery()` estimate as the `battery` stream. Nothing latches:
+the board charges over USB, so the band moves **both** ways. The ±3 % hysteresis on each edge is
+what stops a reading resting on a threshold from flickering between two colors.
+
+**The stream comes first**, and the design is the measured consequence of that. The LED rides
+the **existing 0.2 Hz battery slot** via `Telemetry(hub=hub, on_battery=led.update)`, so the
+sampling loop gains **no per-iteration call**. It never blocks (no sleeps, no animation), never
+touches the I2C bus the IMU shares, writes the pixel only when the band changes, and never
+raises — a cosmetic LED must not stall sampling, and on the BLE build an escaping exception
+would trip the re-advertise handler.
+
+The first cut instead called `led.tick(now)` from `code.py` every iteration, which **measured**
+(15 s captures, 3+ runs per build, board at rest):
+
+| Build | accel | vs no-LED |
+|-------|-------|-----------|
+| no LED at all | 49.14 Hz | — |
+| `tick()` per iteration, body dormant | 48.56 Hz | **-0.59** |
+| `tick()` per iteration, live @ 1 Hz | 48.22 Hz | **-0.93** (median 49 → 48) |
+| **`on_battery` (shipped)** | **48.94 Hz** | **-0.21** (median 49, no glitches) |
+
+Two-thirds of that cost was the *bare guard check*, not the ADC read: a method call here is
+~150 µs (cf. `cobs_encode`'s 708 µs) and the loop turns ~50-60×/s. Hence `on_battery`. The
+tradeoff is a 5 s refresh instead of 1 s — irrelevant for a battery indicator.
+
+`StatusLED.tick(now)` still exists for the **BLE advertising wait**, where `pump` isn't running
+so nothing drives `on_battery` — exactly when the board is on battery with nobody reading the
+stream. That loop has nothing else to do, so the call cost is free there. Verified on the board:
+from `color=None` at boot, the pixel lights on the **first spin** of the advertising loop with no
+central connected, and stays lit across connect → disconnect → re-advertise. (`tick` is called
+~8800×/s in that busy-wait and rate-limits itself to one ADC read/s.)
+
+**Gotcha — it reads green on USB.** `VOLTAGE_MONITOR` sees the *charge* voltage while USB is
+attached, so the pixel generally sits green when plugged in regardless of the pack's true state.
+That is a property of the linear estimate above, not of the LED.
+
+If the `neopixel` library is missing from the board, `StatusLED` disables itself and the board
+streams on with no LED — the indicator is never worth a crash loop.
+
 **Environmental sensing was removed** (BMP280 temperature/pressure/altitude,
 SHT31-D humidity). Those chips only answer a *forced-mode conversion* — a
 blocking ~45 ms per BMP280 read — and `env` + `altitude` together stalled the
@@ -153,6 +204,7 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 | [`feather_protocol.py`](feather_protocol.py) | board **+** host | TLV encode/decode, COBS, `FrameDecoder` |
 | [`sensors.py`](sensors.py) | board | `SensorHub` — inits the raw sensors, one read method per stream |
 | [`telemetry.py`](telemetry.py) | board | `Telemetry.pump(now, emit)` — the shared sample/schedule/encode loop (rates configurable) |
+| [`status_led.py`](status_led.py) | board | `StatusLED.tick(now)` — onboard NeoPixel battery indicator (`band_for` is pure and host-testable) |
 | [`motion.py`](motion.py) | host | `GravityFilter` / `derive_motion` — gravity + linear_accel from raw accel |
 | [`board/serial/code.py`](board/serial/code.py) | board | USB serial entry: `emit = sys.stdout.buffer.write`, full rates |
 | [`board/ble/code.py`](board/ble/code.py) | board | BLE entry: Nordic UART peripheral (`FeatherSense`), `emit = uart.write`, reduced rates |
@@ -169,10 +221,14 @@ Rates are `Telemetry(...)` constructor args, so each board build picks its own. 
 
 | Stream | Nominal (serial) | Measured | % of nominal | Nominal (BLE) |
 |--------|------------------|----------|--------------|---------------|
-| accel | 50 Hz (`imu_hz`) | **48.8 Hz** | 97.5 % | 20 Hz |
-| gyro | 50 Hz (`imu_hz`) | **48.8 Hz** | 97.5 % | 20 Hz |
-| mag | 20 Hz (`mag_hz`) | **19.8 Hz** | 98.8 % | 10 Hz |
+| accel | 50 Hz (`imu_hz`) | **48.9 Hz** | 97.9 % | 20 Hz (measured **21**) |
+| gyro | 50 Hz (`imu_hz`) | **49.0 Hz** | 97.9 % | 20 Hz (measured **21**) |
+| mag | 20 Hz (`mag_hz`) | **20.7 Hz** | ~100 % | 10 Hz (measured **10**) |
 | battery | 0.2 Hz (`battery_hz`) | 0.2 Hz | 100 % | 0.2 Hz |
+
+(Re-measured with the [status LED](#status-led) build, which costs ~0.2 accel samples/s against
+an LED-free 49.1 Hz on the same board — within the run-to-run spread. Earlier rows below were
+captured before the LED existed.)
 
 How it got there — each step measured on the board:
 
@@ -258,10 +314,13 @@ routes the IMU's INT1 to a GPIO at all (check `dir(board)` at the REPL).
 Install the sensor drivers to the board with `circup` (from the repo root):
 
 ```bash
-pixi run circup install adafruit_lsm6ds adafruit_lis3mdl
+pixi run circup install adafruit_lsm6ds adafruit_lis3mdl neopixel
 ```
 
-`adafruit_bus_device` and `adafruit_register` are pulled in automatically.
+`adafruit_bus_device`, `adafruit_register` and `adafruit_pixelbuf` are pulled in automatically.
+`neopixel` backs the [status LED](#status-led) only — omit it and the board still streams, just
+without the indicator.
+
 Resulting `pixi run circup freeze` on the board:
 
 ```
@@ -269,7 +328,10 @@ adafruit_lis3mdl==1.2.8
 adafruit_bus_device==5.2.17
 adafruit_lsm6ds==4.6.3
 adafruit_register==1.11.3
+adafruit_pixelbuf==2.0.12
+neopixel==6.4.2
 ```
+
 
 `adafruit_bmp280` / `adafruit_sht31d` are **no longer needed** (environmental sensing was
 removed); delete them from the board's `lib/` if present.
@@ -279,11 +341,11 @@ root (the board auto-reloads and starts streaming):
 
 ```bash
 # USB serial build (default)
-cp feather_protocol.py sensors.py telemetry.py board/serial/code.py /media/bob/CIRCUITPY/ && sync
+cp feather_protocol.py sensors.py telemetry.py status_led.py board/serial/code.py /media/bob/CIRCUITPY/ && sync
 
 # BLE build — install the BLE library once, then deploy the ble entry
 pixi run circup install adafruit_ble
-cp feather_protocol.py sensors.py telemetry.py board/ble/code.py /media/bob/CIRCUITPY/ && sync
+cp feather_protocol.py sensors.py telemetry.py status_led.py board/ble/code.py /media/bob/CIRCUITPY/ && sync
 ```
 
 **Do not copy `motion.py`** — it is host-only, like `stream.py`/`read_stream.py`. Only one

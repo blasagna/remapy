@@ -7,8 +7,9 @@ is an independent frame, so streams at different rates coexist on one link
 without bundling.
 
 Deploy (USB serial build): copy this file as ``code.py`` plus ``feather_protocol.py``,
-``sensors.py`` and ``telemetry.py`` to the CIRCUITPY drive root. Read it on the
-host with ``read_stream.py`` (or the rerun/recording apps, default transport).
+``sensors.py``, ``telemetry.py`` and ``status_led.py`` to the CIRCUITPY drive root.
+Read it on the host with ``read_stream.py`` (or the rerun/recording apps, default
+transport).
 
 For the BLE build see ``board/ble/code.py``.
 """
@@ -16,6 +17,8 @@ For the BLE build see ``board/ble/code.py``.
 import sys
 import time
 
+from sensors import SensorHub
+from status_led import StatusLED
 from telemetry import Telemetry
 
 
@@ -25,7 +28,11 @@ def _emit(frame):
 
 
 def main():
-    telemetry = Telemetry()  # full USB rates (IMU 50 Hz)
+    hub = SensorHub()
+    led = StatusLED(hub)
+    # The LED rides the battery slot's existing read rather than polling from
+    # this loop: calling it per-iteration measured ~1 accel sample/s.
+    telemetry = Telemetry(hub=hub, on_battery=led.update)  # full USB rates (IMU 50 Hz)
     while True:
         delay = telemetry.pump(time.monotonic(), _emit)
         if delay > 0:

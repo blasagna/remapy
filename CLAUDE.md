@@ -205,8 +205,9 @@ onboard sensors over **USB serial or BLE** (interchangeable transports, same wir
 host-side readers. Mixed runtime: some files run on the board, some on the host, one is shared.
 See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list, and deploy steps.
 
-- **On the board** (deploy = copy the shared trio + the chosen entry to the CIRCUITPY root as
-  `code.py`; libs via `circup install adafruit_lsm6ds adafruit_lis3mdl`): `sensors.py`
+- **On the board** (deploy = copy the four shared modules + the chosen entry to the CIRCUITPY
+  root as `code.py`; libs via `circup install adafruit_lsm6ds adafruit_lis3mdl neopixel`):
+  `sensors.py`
   (`SensorHub` — **raw signals only**: IMU with LSM6DS33/TR-C fallback, LIS3MDL, battery via
   `board.VOLTAGE_MONITOR`; the I2C bus is opened at **400 kHz**, not the 100 kHz `busio` default —
   measured ~1.8× per read). Environmental sensing (BMP280 temp/pressure/altitude, SHT31-D
@@ -219,7 +220,27 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   entry points, a literal `code.py` each**: `board/serial/code.py` (USB, `emit =
   sys.stdout.buffer.write`, full rates) and `board/ble/code.py` (Nordic UART peripheral named
   `FeatherSense` via `adafruit_ble` `UARTService`, `emit = uart.write`, reduced IMU rate for the
-  ~1–2 KB/s link).
+  ~1–2 KB/s link). Each entry builds one `SensorHub` and injects it (`Telemetry(hub=hub)`).
+  `Telemetry` also takes `on_battery(percent)` — an optional sink fired from the existing battery
+  slot, so a display can piggyback that read instead of polling (used by the status LED; must not
+  raise, or `pump`'s handler eats the battery frame).
+- **Status LED:** `status_led.py` (board) — lights the onboard NeoPixel red/yellow/green by
+  battery level (<25 / 25–60 / >60 %, ±3 % hysteresis per edge, edges exclusive-below, so a
+  reading resting on a threshold can't flicker). Nothing latches — the board charges over USB, so
+  the band moves both ways. **Display only:** never on the wire, no protocol change.
+  Deliberately subordinate to streaming, and the shape is **measurement-driven**: it is driven by
+  `Telemetry(on_battery=led.update)`, adding **no per-iteration call** to the sampling loop. The
+  first cut called `StatusLED.tick(now)` from `code.py` each iteration and measured **-0.93 accel
+  samples/s** (49.14 → 48.22, median 49 → 48) — of which **-0.59 was the bare guard check**, not
+  the ADC read: a method call here is ~150 µs (cf. `cobs_encode` at 708 µs) and the loop turns
+  ~50-60×/s. Riding the battery slot costs **-0.21** (median 49). Don't reintroduce a
+  per-iteration LED call. `tick(now)` survives **only** for the BLE advertising wait, where `pump`
+  isn't running so nothing drives `on_battery`, and the idle loop makes the call free. `update`
+  never raises (an escaping error would trip the BLE re-advertise handler) and writes the pixel
+  only when the band changes. `board`/`neopixel` are imported in `__init__`, not at module scope,
+  so a board missing the lib degrades to no LED instead of a crash loop — and `band_for` plus the
+  write path (via an injected `pixel`) stay host-importable and unit-tested. Caveat:
+  `VOLTAGE_MONITOR` reads the *charge* voltage on USB, so it generally shows green when plugged in.
 - **Shared** (board + host, pure `struct`): `feather_protocol.py` — a **TLV-over-COBS** wire
   protocol. Each sample is one COBS-framed record `[type][len][timestamp_u32][int32…]`
   terminated by `0x00`; **no floats on the wire** — values are scaled fixed-point int32 (shared
@@ -245,7 +266,9 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   `open_feather(transport, *, port=None, address=None)` (lazy-imports the backend) — used by
   `rerun_viewer`/`recording`. Import note: host modules add the package dir to `sys.path` so the
   shared `feather_protocol` resolves as a top-level module; **don't import the board files**
-  (`board/*/code.py`, `sensors.py`, `telemetry.py`) on the host.
+  (`board/*/code.py`, `sensors.py`, `telemetry.py`) on the host. `status_led.py` is the
+  deliberate exception — it defers its `board`/`neopixel` imports into `StatusLED.__init__`, so
+  the module imports cleanly on the host and its pure `band_for` is unit-tested there.
 
 ## Environment & commands
 
@@ -291,7 +314,10 @@ display, or GPU and runs in well under a second:
   `motion` derivation (`GravityFilter`/`derive_motion` — seeding, tilt bleed, transients, clock
   wrap, batch/live agreement), the recorder's `/feather` datasets + `Recording.feather` (including
   that derived streams are *not* stored and that `motion(tau_s=…)` re-derives), and the viewer's
-  `log_sensors` + its derived plots (with `rr` mocked). No board, serial port, or BLE adapter
+  `log_sensors` + its derived plots (with `rr` mocked), and the status LED (`band_for` bands +
+  hysteresis in both directions, plus `StatusLED.update`/`tick` against an injected `FakePixel` —
+  pinning that it writes only on a band change, never raises, and no-ops without a pixel). The LED
+  is the only board-side logic reachable from the host. No board, serial port, or BLE adapter
   needed.
 - `cv2.VideoCapture`/`VideoWriter` are patched; the native MediaPipe `PoseLandmarker`/
   `FaceDetector` are patched at their import site (`ensure_model` + the class) so no model loads;

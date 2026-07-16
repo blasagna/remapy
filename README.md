@@ -9,7 +9,7 @@ Much of this is implemented using Claude code and other coding LLMs. I build sim
 
 ## Motivation
 
-My son Remy has an ultra-rare genetic syndrome that causes global developmental
+My son Remy has a rare genetic syndrome that causes global developmental
 delays, in both movement and cognitive function (more at
 [rareremy.org](https://www.rareremy.org)). While we pursue therapeutic development
 and medical research, most of our day-to-day energy goes into physical and
@@ -47,11 +47,11 @@ for motor-development metrics:
 
 ## TODO
 
-- [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
 - [ ] measure streaming throughput compared to nominal sampling rates
 - [ ] baseline IMU signal stats at rest
-- [ ] set LED color to show battery level high, mid, or low.
-- [ ] use embedded system with real hardware interrupts - rpi pico 2w with external sensors.
+- [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
+- [ ] program feather sense in C++ with Zephyr RTOS, or embedded Rust (embassy-nrf and nrf-hal)
+- [ ] program feather sense in embedded Rust (embassy-nrf and nrf-hal). Use schematics from adafruit to build BSP.
 - [ ] port to Android 
 - [ ] consider multiple camera views
 - [ ] consider adding a depth camera

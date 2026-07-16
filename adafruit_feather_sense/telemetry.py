@@ -28,9 +28,18 @@ class Telemetry:
     Only raw signals are sampled — gravity and linear acceleration are derived
     downstream on the host (see ``motion.py``), so one accelerometer read costs
     one frame rather than three.
+
+    ``on_battery(percent)`` is an optional sink for consumers that want the
+    battery level without paying for their own poll: it fires from the existing
+    battery slot, right after the frame is encoded. It exists because a method
+    call in the caller's hot loop is *not* free here — driving the status LED
+    from `code.py` at every iteration measured ~0.6 accel samples/s (~1.2 %) in
+    guard checks alone, versus ~0 riding this slot. It must not raise: an
+    exception propagates into `pump`'s handler, costing that battery frame.
+    Telemetry knows nothing about what consumes this (see ``status_led.py``).
     """
 
-    def __init__(self, hub=None, imu_hz=50, mag_hz=20, battery_hz=0.2):
+    def __init__(self, hub=None, imu_hz=50, mag_hz=20, battery_hz=0.2, on_battery=None):
         self._hub = hub if hub is not None else SensorHub()
         hub = self._hub
 
@@ -45,9 +54,12 @@ class Telemetry:
 
         def battery():
             v, pct, usb = hub.read_battery()
-            return fp.encode(
+            frame = fp.encode(
                 fp.MSG_BATTERY, _now_ms(), fp.to_raw(fp.MSG_BATTERY, (v, pct)), extra_u8=usb
             )
+            if on_battery is not None:
+                on_battery(pct)
+            return frame
 
         # [interval_s, next_due_s, reader, source_type]
         self._schedule = [

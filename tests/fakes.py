@@ -172,3 +172,21 @@ class FakeSerial:
 
     def close(self):
         self.closed = True
+
+
+class FakePixel:
+    """Stand-in for a `neopixel.NeoPixel`, recording what got written.
+
+    Lets the status LED's write logic be tested off-board (`StatusLED(pixel=...)`),
+    where `board`/`neopixel` don't exist.
+    """
+
+    def __init__(self):
+        self.fills = []
+        self.shows = 0
+
+    def fill(self, color):
+        self.fills.append(color)
+
+    def show(self):
+        self.shows += 1

@@ -6,6 +6,11 @@ host-side motion derivation (``adafruit_feather_sense.motion``), the recorder's
 serial port, camera, or rerun viewer is touched: serial is a ``FakeSerial`` fed
 pre-baked protocol frames, HDF5 is a real temp file, and the ``rerun`` SDK is
 mocked.
+
+The board-side exception is ``status_led``: its ``band_for`` thresholds/hysteresis
+are pure, and ``StatusLED``'s write path runs against an injected ``FakePixel``.
+Both stay importable here because ``StatusLED`` defers its ``board``/``neopixel``
+imports into ``__init__``.
 """
 
 import unittest
@@ -19,11 +24,12 @@ import numpy as np
 # adafruit_feather_sense.stream inserts the dir holding feather_protocol on sys.path.
 from adafruit_feather_sense import open_feather
 from adafruit_feather_sense.motion import GravityFilter, derive_motion
+from adafruit_feather_sense.status_led import GREEN, RED, YELLOW, StatusLED, band_for
 from adafruit_feather_sense.stream import FeatherSenseStream, FrameRecordDecoder, SensorRecord
 import feather_protocol as fp
 from recording.reader import Recording
 from recording.recorder import HDF5Recorder
-from tests.fakes import FakeSerial, pose_result, solid_frame
+from tests.fakes import FakePixel, FakeSerial, pose_result, solid_frame
 
 
 def _baked_stream():
@@ -224,6 +230,133 @@ class MotionDerivationTests(unittest.TestCase):
 
     def test_empty_stream_derives_nothing(self):
         self.assertEqual(derive_motion([], []), ([], []))
+
+
+class StatusLEDBandTests(unittest.TestCase):
+    """The board's battery indicator: the pure band/hysteresis logic.
+
+    `StatusLED` defers its `board`/`neopixel` imports into __init__, which is
+    what keeps this module importable here; the write logic is exercised with an
+    injected `FakePixel` in `StatusLEDUpdateTests`.
+    """
+
+    def test_bands_across_the_range(self):
+        self.assertEqual(band_for(0.0), RED)
+        self.assertEqual(band_for(10.0), RED)
+        self.assertEqual(band_for(40.0), YELLOW)
+        self.assertEqual(band_for(80.0), GREEN)
+        self.assertEqual(band_for(100.0), GREEN)
+
+    def test_bare_thresholds_apply_when_nothing_is_lit(self):
+        self.assertEqual(band_for(24.9), RED)
+        self.assertEqual(band_for(25.0), YELLOW)
+        self.assertEqual(band_for(59.9), YELLOW)
+        self.assertEqual(band_for(60.0), GREEN)
+
+    def test_hysteresis_resists_climbing_out_of_a_band(self):
+        # Charging over USB: the level rises, but the band should not flip until
+        # it clears the edge by the hysteresis margin.
+        self.assertEqual(band_for(26.0, RED), RED)
+        self.assertEqual(band_for(28.0, RED), YELLOW)
+        self.assertEqual(band_for(61.0, YELLOW), YELLOW)
+        self.assertEqual(band_for(63.0, YELLOW), GREEN)
+
+    def test_hysteresis_resists_falling_out_of_a_band(self):
+        # Discharging: same margin in the other direction. Edges are exclusive
+        # below, so sitting *on* the shifted edge still holds the band.
+        self.assertEqual(band_for(58.0, GREEN), GREEN)
+        self.assertEqual(band_for(57.0, GREEN), GREEN)
+        self.assertEqual(band_for(56.9, GREEN), YELLOW)
+        self.assertEqual(band_for(23.0, YELLOW), YELLOW)
+        self.assertEqual(band_for(22.0, YELLOW), YELLOW)
+        self.assertEqual(band_for(21.9, YELLOW), RED)
+
+    def test_a_reading_resting_on_an_edge_does_not_oscillate(self):
+        # The flicker case hysteresis exists for: hold at a bare threshold and
+        # the displayed color must stay put once chosen.
+        color = band_for(25.0)
+        for _ in range(10):
+            self.assertEqual(band_for(25.0, color), color)
+
+
+class _BatteryHub:
+    """Minimal SensorHub stand-in: only `read_battery` is reached here."""
+
+    def __init__(self, percent=90.0):
+        self.percent = percent
+        self.reads = 0
+
+    def read_battery(self):
+        self.reads += 1
+        return (4.1, self.percent, 1)
+
+
+class StatusLEDUpdateTests(unittest.TestCase):
+    """The write path, via an injected pixel (no board, no neopixel)."""
+
+    def test_lights_the_band_for_the_level(self):
+        px = FakePixel()
+        StatusLED(_BatteryHub(), pixel=px).update(90.0)
+        self.assertEqual(px.fills, [GREEN])
+        self.assertEqual(px.shows, 1)
+
+    def test_writes_only_when_the_band_changes(self):
+        # show() bit-bangs the pixel with interrupts off; repainting an unchanged
+        # color would spend loop time to display nothing new.
+        px = FakePixel()
+        led = StatusLED(_BatteryHub(), pixel=px)
+        for pct in (90.0, 88.0, 75.0, 61.0):
+            led.update(pct)
+        self.assertEqual(px.fills, [GREEN])
+        self.assertEqual(px.shows, 1)
+
+    def test_rewrites_when_the_band_does_change(self):
+        px = FakePixel()
+        led = StatusLED(_BatteryHub(), pixel=px)
+        led.update(90.0)
+        led.update(10.0)
+        led.update(40.0)
+        self.assertEqual(px.fills, [GREEN, RED, YELLOW])
+        self.assertEqual(px.shows, 3)
+
+    def test_update_never_raises_on_a_failing_pixel(self):
+        class BadPixel:
+            def fill(self, color):
+                raise RuntimeError("pixel is on fire")
+
+            def show(self):
+                pass
+
+        StatusLED(_BatteryHub(), pixel=BadPixel()).update(50.0)  # must not raise
+
+    def test_no_pixel_is_a_silent_no_op(self):
+        # The host case (and a board missing the neopixel lib): stream lives on.
+        led = StatusLED(_BatteryHub())
+        self.assertIsNone(led._pixel)
+        led.update(50.0)
+        led.tick(0.0)
+        self.assertIsNone(led._color)
+
+    def test_tick_self_drives_but_rate_limits(self):
+        # Used only in the BLE advertising gap, where pump() isn't running.
+        hub = _BatteryHub(percent=10.0)
+        led = StatusLED(hub, interval_s=5.0, pixel=FakePixel())
+        led.tick(0.0)
+        led.tick(1.0)
+        led.tick(4.9)
+        self.assertEqual(hub.reads, 1)
+        self.assertEqual(led._color, RED)
+        led.tick(5.0)
+        self.assertEqual(hub.reads, 2)
+
+    def test_tick_survives_a_failing_battery_read(self):
+        class BadHub:
+            def read_battery(self):
+                raise RuntimeError("adc gone")
+
+        led = StatusLED(BadHub(), pixel=FakePixel())
+        led.tick(0.0)  # must not raise
+        self.assertIsNone(led._color)
 
 
 class RecorderFeatherTests(unittest.TestCase):
