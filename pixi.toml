@@ -17,6 +17,8 @@ record = "python -m recording.main --output recording.hdf5"
 record-headless = "python -m recording.main --output recording.hdf5 --max-frames 30"
 export-video = "python -m recording.export"
 annotate = "python -m annotate.main"
+metrics = "python -m motor_metrics.main"
+notebook = "jupyter lab notebooks/"
 test = "python -m unittest discover -s tests -t . -v"
 test-quiet = "python -m unittest discover -s tests -t ."
 
@@ -30,6 +32,7 @@ h5py = ">=3.16.0,<4"
 opencv = ">=5.0.0,<6"
 pyserial = ">=3.5,<4"
 bleak = ">=3.0.2,<4"
+matplotlib = ">=3.11.0,<4"
 
 [pypi-dependencies]
 mediapipe = ">=0.10.35, <0.11"

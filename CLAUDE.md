@@ -11,7 +11,9 @@ plus `numpy`/`scipy`/`pandas` and `h5py` for data.
 Current code: `video_capture/` (OpenCV capture), `pose_estimation/` (MediaPipe pose,
 consuming `video_capture`), `face_blur/` (MediaPipe face redaction), `rerun_viewer/`
 (logs the pipeline to the Rerun viewer), `recording/` (HDF5 recording for offline analysis),
-and `list_devices/` (enumerate compatible capture devices).
+`annotate/` (label time segments in a recording), `motor_metrics/` (continuous metrics for
+standardized GMFM-88 trials, computed offline from labeled recordings), and `list_devices/`
+(enumerate compatible capture devices).
 
 ## Packages
 
@@ -179,6 +181,92 @@ labels to time segments (stored via `recording.annotations.AnnotationStore`).
   before `"r+"` on one path in one process raises `OSError`. `main()` opens the store before the
   reader for exactly this reason (pinned by `test_rw_then_ro_handle_coexist`).
 
+### `motor_metrics/`
+
+Continuous motor metrics for standardized therapy exercises, computed **offline** from
+recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
+
+- **The premise, which drives every design choice here:** the instruments score **ordinally**
+  (GMFM items are 0–3; AIMS is observed/not-observed) and that is too coarse to show change —
+  Remy can sit at a "2" for a year while genuinely improving. So the scoring is **not**
+  reimplemented. Each item defines a reproducible **trial**; this package measures the
+  *continuous variable underneath it*. **GMFM-88 is the spine** (criterion-referenced, so no age
+  ceiling — AIMS norms stop at 18 months and he would floor out; dims B/C/D bracket him exactly).
+  PDMS-3 is deferred (needs the kit + examiner administration).
+- **Scope: camera-only, offline.** The Feather Sense IMU is out, which is what lets
+  `segments.py` be a plain `searchsorted` — annotations and `Recording.timestamps_ms` share a
+  clock, while the IMU's is a device clock whose offset is never stored. See the README TODO.
+- **Division of labour: the annotator judges, the code measures.** `duration_s` is the *marked*
+  trial length, because the in/out points are a human's call on when sitting began and ended.
+  Nothing infers loss-of-posture from a trunk-angle threshold, and `arms=free` is an assertion in
+  the label, not a detection (`hands_low_frac` is a QC hint — weight-bearing is a force question
+  and there is no force sensor). `tracked_s` is a *data-quality* figure, not a claim about sitting.
+- **Derive-on-read, never written back** — the same rule as `recording/recorder.py`, and it binds
+  harder here: every number is a function of the `derive.py` constants, so freezing metrics into
+  the `.h5` would strand them at whatever those were that week. `Recording.angles()` is the pattern.
+- `labels.py` — the annotation vocabulary, `exercise[;key=value]*` (`sit_hold;arms=free;gmfm=23`).
+  Typed by hand at `annotate`'s prompt; **`annotate/main.py` is unchanged** (it stores free text —
+  this is a read-side convention). `parse_label` is **total**: returns `None` on legacy free text,
+  never raises. Value checking is separate and advisory (`label_warnings`) because a typo'd
+  `arms=freee` must not raise mid-report but must not pass silently either — it would become its
+  own `groupby` bucket and split a baseline. GMFM item *numbers* are deliberately not hard-coded
+  (`gmfm=` is a free field copied off the score sheet); only the B/C/D `DIMENSIONS` map is.
+- `quality.py` — `Gate`/`landmarks_ok`/`coverage`/`longest_run`. Load-bearing, because MediaPipe
+  **extrapolates** occluded landmarks rather than dropping them: those frames pass `pose_present`
+  carrying invented coordinates. (`pose_present` is *not* buggy — `recorder.py` writes a full
+  33×3 NaN row, so NOSE-x NaN ⟺ whole row NaN. Don't "fix" it.) Every metric gates on the
+  landmarks it reads and returns `coverage` beside its numbers. `longest_run` never bridges a
+  dropout — that would invent the movement inside it.
+- `signals.py` — **`landmarks_world` is hip-centered: MediaPipe puts the frame's origin *at* the
+  mid-hip.** Two consequences run through everything: (1) a mid-hip "COM sway" proxy is
+  **identically zero** — pinned by `test_world_mid_hip_com_proxy_is_identically_zero`; the real
+  signal is `trunk_vector` (mid-shoulder over the pelvis), which the hip-centered origin makes
+  scale- and calibration-free; (2) floor translation is **not recoverable** — only `com_norm`
+  (image fractions) sees it. `trunk_from_vertical` reuses `angles.angle_between` and inherits its
+  **unsigned** semantics (no forward/backward/lateral); `project_horizontal` carries direction and
+  returns (ML, AP) **split on purpose** — ML is in the image plane, AP is inferred depth and much
+  noisier. `WORLD_UP` is vertical **only if the camera is level**; `estimate_up` is opt-in and not
+  the default (it cannot separate camera tilt from a child who does not sit vertically), and every
+  metric records `up_source`.
+- `derive.py` — resample to a uniform grid, then Savitzky-Golay. `FS`/`WINDOW_S`/`POLY` are
+  **module constants, not per-call knobs**: two numbers are comparable only through an identical
+  chain, and these get compared across months. The chain's measured derivative gain is documented
+  and pinned (0.997 at 0.25 Hz → 0.95 at 1 Hz → 0.61 at 3 Hz) — a *bias*, identical for every
+  trial, so it cancels within-child but makes the magnitudes non-comparable to any other pipeline.
+  First and only use of scipy in the repo. `smooth` returns NaN below the window, never raises.
+- `segments.py` — annotations → frame spans. Drops unparseable labels and anything overlapping an
+  `exclude` **whole** (a hold whose middle is untrustworthy is not a shorter valid hold; trimming
+  would invent a boundary). Mark two trials around the excluded stretch to keep the good parts.
+- `hold.py` — sitting **and** supported standing (one function; the label carries the difference).
+  Duration + sway (path length, 95 % ellipse, RMS, ML/AP split, mean velocity) + trunk-angle stats.
+  **`path_length_m` is duration-confounded** — a worse 20 s hold beats a better 8 s one on it; use
+  `mean_velocity_mps` or a common `window_s`. **Ellipse area reads ~0 for one-axis rocking** (a
+  line encloses nothing), so read it next to the ML/AP RMS, never alone.
+- `transition.py` — `sparc` (spectral arc length) is primary on trunk angular speed. **Read only
+  against itself**: at 30 Hz the absolute value is a pipeline artifact. Its measured noise
+  robustness has a **ceiling** — flat to ~2 % of peak speed, erratic past ~5 % (sd 0.24) — so big
+  brisk transitions score reliably and small slow ones may not; prefer the median of several.
+  It separates *fluid from effortful* but does **not** count corrections (more submovements
+  eventually score *better* as they blend); `count_submovements` counts. `symmetry_index` is a
+  **between-trial** comparison grouped by the label's `side=`.
+- `crawl.py` — **the GMFM item's "1.8 m" is not measurable here** (hip-centered frame, one camera,
+  no depth, no IMU); `speed_norm_per_s` is in **image widths/s, never metres**. The deliverable is
+  the *pattern*, which the pelvis-centered frame captures perfectly: cadence, `cycle_period_cv`,
+  and `phase_offset` (**0.5 = reciprocal/mature, 0.0 = symmetric "bunny" haul**). Limb signal is
+  the wrist projected on the **trunk axis** — in prone there is no useful vertical.
+  `MIN_CYCLE_EXCURSION_M` is **not optional**: the prominence gate alone is relative to the
+  signal's own range, so it normalizes pure jitter up into a textbook crawl (measured: 57 cycles
+  from noise, a still child reporting a confident fictional cadence).
+- `report.py` / `main.py` — `metrics_table(rec)` → one row per trial, columns the **union** across
+  exercises (so they concatenate into a trend); `session_table(paths)` for the cross-session view,
+  which is the whole point given there is no external GMFM score to calibrate against. Label params
+  are prefixed `p_` to stay clear of metric fields of the same name; `warnings` carries the label QC.
+  `duration_s`/`tracked_s`/`coverage`/`n_frames` mean the same thing in **every** metric dataclass
+  so the union table has no per-exercise holes. CLI: `pixi run metrics session.h5 [--csv out.csv]`.
+- `notebooks/motor_metrics.ipynb` (`pixi run notebook`) — label inventory + coverage QC → **the
+  vertical-reference diagnostic** (check it before trusting any hold number) → per-exercise tables
+  → sway/limb plots → cross-session trend.
+
 ### `list_devices/`
 
 Discovery helper: which capture devices can the other CLIs actually use? Compatibility is
@@ -329,6 +417,9 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run record-headless` — record 30 frames to `recording.hdf5` (bounded run).
 - `pixi run export-video <in.hdf5> <out.mp4> [--fps N]` — rebuild an mp4 from a recording's stored frames.
 - `pixi run annotate <session.hdf5>` — scrub a recording and label time segments (edits saved in place).
+- `pixi run metrics <session.hdf5> [--csv out.csv] [--exercise sit_hold]` — motor metrics for the
+  labeled trials in a recording (`--window-s N` to compare holds of unequal length fairly).
+- `pixi run notebook` — Jupyter Lab in `notebooks/` (offline metric exploration).
 - `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
@@ -342,7 +433,21 @@ display, or GPU and runs in well under a second:
 
 - `tests/fakes.py` — shared duck-typed stand-ins: MediaPipe landmark/pose/detection results, an
   opened `cv2.VideoCapture` (`FakeCapture`), `cv2.VideoWriter` (`FakeVideoWriter`), and a
-  pyserial handle (`FakeSerial`, fed pre-baked protocol bytes).
+  pyserial handle (`FakeSerial`, fed pre-baked protocol bytes). Plus `fake_recording()` (a
+  duck-typed `Recording` — the `motor_metrics` functions read only attributes, so their tests
+  need no HDF5) and `body_world()` (synthetic *anatomy*: `make_landmarks` spreads points along a
+  diagonal, which is fine for pass-through tests but is not a body, and postural metrics need one).
+- `tests/test_motor_metrics.py` — the metrics package. Pure logic runs unmocked against real
+  numpy/scipy and is pinned to **closed forms, not recorded outputs** (polygon perimeter for path
+  length; `5.991·π·σ²` for the sway ellipse; constructed lean angles; sine frequency for cadence;
+  anti-phase → 0.5). Where no closed form exists the tests pin **ordering or invariance**:
+  SPARC's absolute value is a pipeline artifact, so asserting a number would pin the noise. Three
+  regression pins earn their keep: the world mid-hip COM proxy being identically zero, the
+  `derive.py` filter's frequency response, and `MIN_CYCLE_EXCURSION_M` (without it pure jitter
+  reads as 57 crawl cycles). Every metric is exercised for empty / single-frame /
+  shorter-than-window / fully-untracked segments — all must return NaN, never raise, since one
+  mis-marked annotation must not take down a 40-row report. Integration tests drive the real
+  `HDF5Recorder` → `AnnotationStore` → `Recording` → `metrics_table` path against temp files.
 - `tests/test_feather.py` — the Feather Sense host integration: `FeatherSenseStream` decode/poll
   and `open_if_available` probe (via `FakeSerial`), the shared `FrameRecordDecoder`, the
   `open_feather` transport dispatch (serial/ble backends mocked — no real radio), the host
