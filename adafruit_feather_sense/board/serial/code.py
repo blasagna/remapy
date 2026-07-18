@@ -17,11 +17,23 @@ For the BLE build see ``board/ble/code.py``.
 import sys
 import time
 
+import supervisor
+
 from sensors import SensorHub
 from status_led import StatusLED
 from telemetry import Telemetry, _now_ms
 
 IMU_HZ = 100  # ~4.4 KB/s of frames; USB CDC is nowhere near a constraint
+
+# CircuitPython's status bar writes an xterm title escape sequence to the
+# console — `ESC]0;<snake> BLE:Off | code.py...` — and on this build the console
+# *is* the data channel, so that text lands in the middle of the binary stream.
+# It cost exactly one decode error per host attach: the host splits on 0x00,
+# hands the escape sequence to `cobs_decode`, and correctly rejects it. Nothing
+# framed is lost (the stream resyncs at the next delimiter) but a permanent
+# `errors=1` trains you to ignore the error counter, which is the real damage.
+# Must run before the first frame is emitted.
+supervisor.status_bar.console = False
 
 
 def _emit(frame):
