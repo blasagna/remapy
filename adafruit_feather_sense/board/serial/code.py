@@ -35,8 +35,10 @@ def main():
     hub = SensorHub(imu_hz=IMU_HZ)
     led = StatusLED(hub)
     # The LED rides the battery slot's existing read rather than polling from
-    # this loop: calling it per-iteration measured ~1 accel sample/s.
-    telemetry = Telemetry(hub=hub, imu_hz=IMU_HZ, on_battery=led.update)
+    # this loop: calling it per-iteration measured ~1 accel sample/s. The
+    # charging pulse needs a faster tick than that slot's 0.2 Hz, so it gets its
+    # own scheduled slot — still not a per-iteration call.
+    telemetry = Telemetry(hub=hub, imu_hz=IMU_HZ, on_battery=led.update, on_pulse=led.pulse)
     while True:
         next_due_ms = telemetry.pump(_now_ms(), _emit)
         delay = (next_due_ms - _now_ms()) / 1000
