@@ -472,7 +472,7 @@ lie to you about idle.
 `read_stream.py --stats` / `read_ble.py --stats` print, per stream, per second:
 
 ```
---- 1.001 s ---  errors=1
+--- 1.001 s ---  errors=0
   accel     n= 100  host=  99.9/s  dev= 100.0/s  gap max=  11.0 ms
 ```
 
@@ -483,6 +483,13 @@ lie to you about idle.
   swings ±5 % on BLE from the host's own poll jitter while `dev` sits still.
 - **`gap max`** — largest interval between consecutive device timestamps. A rate on target with an
   outsized gap means the stream stalled and caught up in a burst, which neither average shows.
+- **`errors`** — cumulative frames the decoder rejected. It should read **0**; treat anything else
+  as contamination of the data channel, not as noise to tune out. The serial build used to print a
+  permanent `errors=1` because CircuitPython's status bar writes an xterm title escape sequence
+  (`ESC]0;🐍 BLE:Off | code.py…`) to the console, which on that build *is* the data channel — one
+  text blob per host attach, landing between two frames. `board/serial/code.py` now sets
+  `supervisor.status_bar.console = False` before the first frame. Nothing was ever lost to it (the
+  stream resyncs at the next `0x00`), but a counter that always reads 1 is a counter nobody reads.
 
 **Divide by measured elapsed, not by the nominal interval.** These tools used to print a raw count
 labelled `/s` over a window gated on `>= 1.0 s` — which a blocking read always overshoots, so a
