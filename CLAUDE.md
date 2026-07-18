@@ -317,9 +317,13 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   measures ~100 Hz IMU before saturating, so 50 has ~2× margin; the old "~1–2 KB/s" figure was
   never measured and understated it ~2×). Each entry builds one `SensorHub` and injects it
   (`Telemetry(hub=hub)`), passing the same `imu_hz` to both so the ODR and the poll agree.
-  `Telemetry` also takes `on_battery(percent)` — an optional sink fired from the existing battery
-  slot, so a display can piggyback that read instead of polling (used by the status LED; must not
-  raise, or `pump`'s handler eats the battery frame).
+  `Telemetry` also takes `on_battery(percent, usb_connected)` — an optional sink fired from the
+  existing battery slot, so a display can piggyback that read instead of polling (used by the
+  status LED; must not raise, or `pump`'s handler eats the battery frame) — and
+  `on_pulse(now_ms)` / `pulse_hz` (default 15), a second sink on its **own** slot for a consumer
+  that must animate rather than observe (the LED's charging ramp; 0.2 Hz can't drive one). It
+  reads no sensor and puts **nothing on the wire**, and is left out of the schedule entirely when
+  unset.
 - **The schedule runs on integer milliseconds — never `time.monotonic()`.** CircuitPython builds
   **single-precision** floats, so `monotonic()`'s ULP grows with uptime (~2 ms at 5.6 h, ~4 ms at
   10 h). Combined with the old `due = now + interval` (which rescheduled from the *observed* time
@@ -339,8 +343,19 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   **~66 % idle**.
 - **Status LED:** `status_led.py` (board) — lights the onboard NeoPixel red/yellow/green by
   battery level (<25 / 25–60 / >60 %, ±3 % hysteresis per edge, edges exclusive-below, so a
-  reading resting on a threshold can't flicker). Nothing latches — the board charges over USB, so
-  the band moves both ways. **Display only:** never on the wire, no protocol change.
+  reading resting on a threshold can't flicker), and **pulses that same color while charging**
+  (12→100→12 % over 2 s, quantized to 16 steps so the "write only on change" guard still catches).
+  Color means level and only level; charging is carried by the animation. Nothing latches — the
+  band moves both ways. **Display only:** never on the wire, no protocol change.
+  **USB picks the animation, never the band.** `VOLTAGE_MONITOR` reads the **battery terminal**,
+  not the charger's output: measured while charging, two packs gave 4.00 V/80.3 % and
+  4.09 V/89.5 %, so the estimate still tracks the pack when plugged in. The README's old "reads
+  green on USB regardless of the pack" gotcha was never measured and is **wrong** — a first cut of
+  the charging feature believed it, capped the band while on USB (ceiling = last band seen
+  unplugged, yellow when none) and, since that ceiling lives in RAM and the board almost always
+  boots plugged in, pinned the LED to a permanent amber. Don't reintroduce a cap. Charging does
+  elevate the reading slightly; no offset corrects it because none has been measured — add one
+  only with a number attached, and only if a low pack is seen reading high on the charger.
   Deliberately subordinate to streaming, and the shape is **measurement-driven**: it is driven by
   `Telemetry(on_battery=led.update)`, adding **no per-iteration call** to the sampling loop. The
   first cut called `StatusLED.tick(now)` from `code.py` each iteration and measured **-0.93 accel
@@ -348,8 +363,14 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   the ADC read: a method call here is ~150 µs and the loop turned ~50-60×/s. Riding the battery
   slot costs **-0.21** (median 49). Don't reintroduce a per-iteration LED call — **the rule got
   stricter**, since the loop now turns ~100-120×/s, so any per-iteration cost roughly doubles.
+  The charging ramp can't ride a 0.2 Hz slot, so it takes its **own** `Telemetry` slot
+  (`on_pulse=led.pulse` at 15 Hz) rather than a call in `code.py` — same rule, one more scheduled
+  slot; off USB `pulse` returns on a single attribute test. Measured on the board while charging
+  (so the ramp was live): **accel 100.0/s device-side, exactly nominal**, no error frames. That
+  **bounds** the cost, it doesn't measure it — at ~34 % of loop ceiling, ~2 ms/s of extra work
+  can't move the rate. Probe with `imu_hz=400` if the real per-call cost ever matters.
   `tick(now)` survives **only** for the BLE advertising wait, where `pump`
-  isn't running so nothing drives `on_battery`, and the idle loop makes the call free. `update`
+  isn't running so nothing drives `on_battery`/`on_pulse`, and the idle loop makes the call free. `update`
   never raises (an escaping error would trip the BLE re-advertise handler) and writes the pixel
   only when the band changes. `board`/`neopixel` are imported in `__init__`, not at module scope,
   so a board missing the lib degrades to no LED instead of a crash loop — and `band_for` plus the
@@ -455,8 +476,12 @@ display, or GPU and runs in well under a second:
   wrap, batch/live agreement), the recorder's `/feather` datasets + `Recording.feather` (including
   that derived streams are *not* stored and that `motion(tau_s=…)` re-derives), and the viewer's
   `log_sensors` + its derived plots (with `rr` mocked), and the status LED (`band_for` bands +
-  hysteresis in both directions, plus `StatusLED.update`/`tick` against an injected `FakePixel` —
-  pinning that it writes only on a band change, never raises, and no-ops without a pixel). No
+  hysteresis in both directions, plus `StatusLED.update`/`pulse`/`tick` against an injected
+  `FakePixel` — pinning that it writes only on a change, never raises, no-ops without a pixel, and
+  that the charging rules hold: USB selects the animation and never the band (the capping
+  regression), an almost-full pack reads green on the charger while a low one still reads red, the
+  ramp keeps the hue and never goes dark, and the 0.2 Hz battery slot doesn't stamp full
+  brightness over a ramp in progress). No
   board, serial port, or BLE adapter needed.
   Also **`TelemetryScheduleTests`** — the board's sampling schedule, driven by a fake hub and a
   fake clock (reachable because `telemetry.py` defers its `sensors` import; `status_led.py` is the

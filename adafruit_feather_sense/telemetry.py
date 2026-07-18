@@ -53,9 +53,27 @@ class Telemetry:
     guard checks alone, versus ~0 riding this slot. It must not raise: an
     exception propagates into `pump`'s handler, costing that battery frame.
     Telemetry knows nothing about what consumes this (see ``status_led.py``).
+
+    ``on_pulse(now_ms)`` is a second sink, on its own ``pulse_hz`` slot, for a
+    consumer that must *animate* rather than just observe — the status LED's
+    charging ramp, which 0.2 Hz cannot drive. It reads no sensor and emits no
+    frame; it exists here rather than in `code.py` for the same reason
+    ``on_battery`` does, that a call in the caller's hot loop costs ~150 µs
+    against a loop turning ~100×/s. As a scheduled slot it costs one extra list
+    entry per `pump` plus `pulse_hz` calls a second. Left out of the schedule
+    entirely when unset, so the default build is byte-for-byte the old loop.
     """
 
-    def __init__(self, hub=None, imu_hz=50, mag_hz=20, battery_hz=0.2, on_battery=None):
+    def __init__(
+        self,
+        hub=None,
+        imu_hz=50,
+        mag_hz=20,
+        battery_hz=0.2,
+        on_battery=None,
+        on_pulse=None,
+        pulse_hz=15,
+    ):
         if hub is None:
             # Deferred so the host can import this module without `board`/`busio`
             # (the pattern `status_led.py` uses). Injecting a fake hub is what
@@ -91,8 +109,12 @@ class Telemetry:
                 fp.MSG_BATTERY, _now_ms(), fp.to_raw(fp.MSG_BATTERY, (v, pct)), extra_u8=usb
             )
             if on_battery is not None:
-                on_battery(pct)
+                on_battery(pct, usb)
             return frame
+
+        def pulse():
+            on_pulse(_now_ms())
+            return ()  # drives a display, produces nothing for the wire
 
         # [interval_ms, next_due_ms, reader, source_type] — integer ms throughout.
         # A stream at 0 Hz is left out of the list rather than parked at a
@@ -104,6 +126,7 @@ class Telemetry:
                 (imu_hz, imu, fp.MSG_ACCEL),  # emits accel + gyro
                 (mag_hz, mag, fp.MSG_MAG),
                 (battery_hz, battery, fp.MSG_BATTERY),
+                (pulse_hz if on_pulse is not None else 0, pulse, fp.MSG_BATTERY),
             )
             if hz > 0
         ]

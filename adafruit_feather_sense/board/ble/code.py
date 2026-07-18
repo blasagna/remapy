@@ -40,15 +40,20 @@ def main():
     advertisement = ProvideServicesAdvertisement(uart)
     hub = SensorHub(imu_hz=IMU_HZ)
     led = StatusLED(hub)
-    # While streaming, the LED rides the battery slot — no call in the hot loop.
-    telemetry = Telemetry(hub=hub, imu_hz=IMU_HZ, mag_hz=10, on_battery=led.update)
+    # While streaming, the LED rides the battery slot — no call in the hot loop;
+    # the charging pulse rides its own slot, which the 0.2 Hz battery slot is far
+    # too slow to animate.
+    telemetry = Telemetry(
+        hub=hub, imu_hz=IMU_HZ, mag_hz=10, on_battery=led.update, on_pulse=led.pulse
+    )
 
     while True:
         ble.start_advertising(advertisement)
-        # `pump` (and so the battery slot driving the LED) doesn't run while
-        # advertising — which is exactly when the board is on battery with nobody
-        # reading it — so self-drive the LED here. This loop has nothing else to
-        # do, so `tick`'s cost is free, and it rate-limits itself.
+        # `pump` (and so the battery + pulse slots driving the LED) doesn't run
+        # while advertising — which is exactly when the board is on battery with
+        # nobody reading it — so self-drive the LED here. This loop has nothing
+        # else to do, so `tick`'s cost is free; it rate-limits the battery read
+        # and pulses on every spin.
         while not ble.connected:
             led.tick(time.monotonic())
         ble.stop_advertising()

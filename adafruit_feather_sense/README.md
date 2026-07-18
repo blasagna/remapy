@@ -72,9 +72,9 @@ microphone. Both are easy to add later as new message types.
 
 ## Status LED
 
-`status_led.py` lights the onboard NeoPixel by battery level, so the board reports its own
-state while untethered rather than only over the wire. It is **display only** — nothing about
-it reaches the protocol, and the host never sees it.
+`status_led.py` lights the onboard NeoPixel by battery level and **pulses it while charging**, so
+the board reports its own state while untethered rather than only over the wire. It is **display
+only** — nothing about it reaches the protocol, and the host never sees it.
 
 | Band | Level | Sticky edge |
 |------|-------|-------------|
@@ -82,16 +82,31 @@ it reaches the protocol, and the host never sees it.
 | 🟡 yellow | 25 – 60 % | must reach 63 % to go green, drop below 22 % to go red |
 | 🟢 green | > 60 % | must drop below 57 % to go yellow |
 
-Level is read from the same `read_battery()` estimate as the `battery` stream. Nothing latches:
-the board charges over USB, so the band moves **both** ways. The ±3 % hysteresis on each edge is
-what stops a reading resting on a threshold from flickering between two colors.
+| Power | Pixel |
+|-------|-------|
+| on battery | solid, at the band color |
+| charging (USB attached) | **the same band color, ramping** 12 % → 100 % → 12 % over 2 s |
 
-**The stream comes first**, and the design is the measured consequence of that. The LED rides
+Level is read from the same `read_battery()` estimate as the `battery` stream. Nothing latches:
+the band moves **both** ways. The ±3 % hysteresis on each edge is what stops a reading resting on
+a threshold from flickering between two colors. Color always means level and only level —
+charging is carried by the animation, so the two are readable independently.
+
+**The stream comes first**, and the design is the measured consequence of that. The level rides
 the **existing 0.2 Hz battery slot** via `Telemetry(hub=hub, on_battery=led.update)`, so the
-sampling loop gains **no per-iteration call**. It never blocks (no sleeps, no animation), never
-touches the I2C bus the IMU shares, writes the pixel only when the band changes, and never
-raises — a cosmetic LED must not stall sampling, and on the BLE build an escaping exception
-would trip the re-advertise handler.
+sampling loop gains **no per-iteration call**. The ramp obviously cannot animate at 0.2 Hz, so it
+gets its **own scheduled slot** — `Telemetry(on_pulse=led.pulse)` at `PULSE_HZ` (15 Hz) — which is
+still not a per-iteration call: it costs `pump` one more list entry to walk, plus 15 calls a
+second, and it is off the schedule entirely when unset. Off USB `pulse` returns on a single
+attribute test. Measured on the board (15 s serial capture, charging so the ramp was actually
+running): **accel 100.0/s device-side, dead on nominal**, mag 20.0/s, no error frames. That
+**bounds** the cost rather than measuring it — the 100 Hz build runs at ~34 % of the loop ceiling,
+so anything under ~2 ms/s of extra work disappears into the idle margin and cannot show up as a
+rate drop. To see the true per-call cost you would have to probe with `imu_hz=400` as the
+`encode_xyz` work did. The LED still never blocks (no sleeps), never touches the I2C bus the IMU
+shares, writes the pixel only when the rendered color actually changes — the ramp is quantized to
+16 steps so that guard keeps catching — and never raises, since a cosmetic LED must not stall
+sampling and on the BLE build an escaping exception would trip the re-advertise handler.
 
 The first cut instead called `led.tick(now)` from `code.py` every iteration, which **measured**
 (15 s captures, 3+ runs per build, board at rest):
@@ -108,15 +123,40 @@ Two-thirds of that cost was the *bare guard check*, not the ADC read: a method c
 tradeoff is a 5 s refresh instead of 1 s — irrelevant for a battery indicator.
 
 `StatusLED.tick(now)` still exists for the **BLE advertising wait**, where `pump` isn't running
-so nothing drives `on_battery` — exactly when the board is on battery with nobody reading the
-stream. That loop has nothing else to do, so the call cost is free there. Verified on the board:
+so nothing drives `on_battery`/`on_pulse` — exactly when the board is on battery with nobody
+reading the stream. That loop has nothing else to do, so the call cost is free there; `tick`
+rate-limits the ADC read to `interval_s` but pulses on every spin. Verified on the board:
 from `color=None` at boot, the pixel lights on the **first spin** of the advertising loop with no
 central connected, and stays lit across connect → disconnect → re-advertise. (`tick` is called
 ~8800×/s in that busy-wait and rate-limits itself to one ADC read/s.)
 
-**Gotcha — it reads green on USB.** `VOLTAGE_MONITOR` sees the *charge* voltage while USB is
-attached, so the pixel generally sits green when plugged in regardless of the pack's true state.
-That is a property of the linear estimate above, not of the LED.
+**The band is the reading, plugged in or not.** USB changes *how* the band is shown (pulsing
+rather than solid), never *which* band. Measured on the board while charging, two packs:
+
+| Pack | Reading on the charger | Band |
+|------|------------------------|------|
+| partly charged | 4.00 V → 80.3 % | 🟢 green |
+| almost full | 4.09 V → 89.5 % | 🟢 green |
+
+Those differ, which is the point: `VOLTAGE_MONITOR` reads the **battery terminal**, not the
+charger's output, so the estimate still tracks the pack while USB is attached. An earlier cut of
+this feature assumed the opposite (see the correction below) and capped the band while charging,
+which pinned the LED to amber and made it report nothing.
+
+Charging *does* elevate the terminal voltage somewhat, so a reading taken on the charger runs a
+little optimistic. **No offset corrects for it**, because no offset has been measured — an
+uncalibrated fudge factor would be guesswork dressed as precision. If a genuinely low pack is ever
+seen reading too high on the charger, that is where to add one, with the number written down.
+(That case is untested: both measurements above are of healthy packs.)
+
+The `battery` stream on the wire is unaffected — it still carries the raw estimate plus the
+`usb_connected` flag, and the host can interpret them however it likes.
+
+> **Correction (2026-07-18).** This README previously stated that the pixel "reads green on USB
+> regardless of the pack's true state", as a property of `read_battery()`. That was never
+> measured, and the readings above contradict it. A feature was built on top of that claim before
+> anyone checked it; the cost was an LED that displayed a constant amber. Measure the sensor
+> before designing around its failure mode.
 
 If the `neopixel` library is missing from the board, `StatusLED` disables itself and the board
 streams on with no LED — the indicator is never worth a crash loop.
@@ -245,7 +285,7 @@ one with `--feather-transport {serial,ble}` and nothing else changes.
 | [`feather_protocol.py`](feather_protocol.py) | board **+** host | TLV encode/decode, COBS, `FrameDecoder` |
 | [`sensors.py`](sensors.py) | board | `SensorHub` — inits the raw sensors, one read method per stream |
 | [`telemetry.py`](telemetry.py) | board | `Telemetry.pump(now_ms, emit)` — the shared sample/schedule/encode loop (rates configurable). Host-importable and tested: it defers its `sensors` import |
-| [`status_led.py`](status_led.py) | board | `StatusLED.tick(now)` — onboard NeoPixel battery indicator (`band_for` is pure and host-testable) |
+| [`status_led.py`](status_led.py) | board | `StatusLED.update/pulse/tick` — onboard NeoPixel battery indicator, pulsing while charging (`band_for`/`pulse_level` are pure and host-testable) |
 | [`motion.py`](motion.py) | host | `GravityFilter` / `derive_motion` — gravity + linear_accel from raw accel |
 | [`board/serial/code.py`](board/serial/code.py) | board | USB serial entry: `emit = sys.stdout.buffer.write`, full rates (IMU 100 Hz) |
 | [`board/ble/code.py`](board/ble/code.py) | board | BLE entry: Nordic UART peripheral (`FeatherSense`), `emit = uart.write`, reduced rates (IMU 50 Hz) |

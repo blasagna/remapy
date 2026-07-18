@@ -26,7 +26,15 @@ import numpy as np
 # adafruit_feather_sense.stream inserts the dir holding feather_protocol on sys.path.
 from adafruit_feather_sense import open_feather
 from adafruit_feather_sense.motion import GravityFilter, derive_motion
-from adafruit_feather_sense.status_led import GREEN, RED, YELLOW, StatusLED, band_for
+from adafruit_feather_sense.status_led import (
+    GREEN,
+    PULSE_PERIOD_MS,
+    RED,
+    YELLOW,
+    StatusLED,
+    band_for,
+    pulse_level,
+)
 from adafruit_feather_sense.stream import (
     FeatherSenseStream,
     FrameRecordDecoder,
@@ -367,16 +375,51 @@ class TelemetryScheduleTests(unittest.TestCase):
 
     def test_on_battery_fires_from_the_battery_slot(self):
         seen = []
-        tel = Telemetry(hub=_FakeHub(), imu_hz=100, battery_hz=10, on_battery=seen.append)
+        tel = Telemetry(
+            hub=_FakeHub(),
+            imu_hz=100,
+            battery_hz=10,
+            on_battery=lambda pct, usb: seen.append((pct, usb)),
+        )
         self._run(tel, 1000)
         self.assertEqual(len(seen), 10)
-        self.assertAlmostEqual(seen[0], 80.0)
+        self.assertAlmostEqual(seen[0][0], 80.0)
+
+    def test_on_battery_is_told_the_usb_state(self):
+        # The LED needs it: a reading taken on USB is an upper bound, not a
+        # level, so the consumer has to know which kind it got.
+        seen = []
+        tel = Telemetry(
+            hub=_FakeHub(),
+            imu_hz=100,
+            battery_hz=10,
+            on_battery=lambda pct, usb: seen.append(usb),
+        )
+        self._run(tel, 1000)
+        self.assertEqual(set(seen), {_FakeHub().read_battery()[2]})
+
+    def test_on_pulse_runs_on_its_own_slot_and_emits_nothing(self):
+        # The charging ramp can't ride the 0.2 Hz battery slot, so it gets its
+        # own — but it drives a display, so it must not put a frame on the wire.
+        seen = []
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100, mag_hz=0, battery_hz=0, on_pulse=seen.append)
+        got = self._run(tel, 1000)
+        self.assertEqual(len(seen), 15)  # default pulse_hz
+        self.assertEqual(sorted(got), ["accel", "gyro"])
+
+    def test_no_on_pulse_leaves_the_schedule_untouched(self):
+        # `pump` walks the schedule every iteration, so an unused slot must not
+        # be in it at all.
+        tel = Telemetry(hub=_FakeHub(), imu_hz=100)
+        self.assertEqual(len(tel._schedule), 3)
+        with_pulse = Telemetry(hub=_FakeHub(), imu_hz=100, on_pulse=lambda _ms: None)
+        self.assertEqual(len(with_pulse._schedule), 4)
 
     def test_a_raising_on_battery_costs_only_its_own_frame(self):
         # `on_battery` fires inside the battery reader, so an exception lands in
         # pump's handler: the battery frame becomes an error frame. Everything
         # else must be untouched.
-        def boom(_pct):
+        def boom(_pct, _usb):
             raise RuntimeError("led died")
 
         tel = Telemetry(hub=_FakeHub(), imu_hz=100, battery_hz=10, on_battery=boom)
@@ -591,13 +634,14 @@ class StatusLEDBandTests(unittest.TestCase):
 class _BatteryHub:
     """Minimal SensorHub stand-in: only `read_battery` is reached here."""
 
-    def __init__(self, percent=90.0):
+    def __init__(self, percent=90.0, usb=1):
         self.percent = percent
+        self.usb = usb
         self.reads = 0
 
     def read_battery(self):
         self.reads += 1
-        return (4.1, self.percent, 1)
+        return (4.1, self.percent, self.usb)
 
 
 class StatusLEDUpdateTests(unittest.TestCase):
@@ -657,6 +701,91 @@ class StatusLEDUpdateTests(unittest.TestCase):
         self.assertEqual(led._color, RED)
         led.tick(5.0)
         self.assertEqual(hub.reads, 2)
+
+    def test_charging_pulses_the_band_color(self):
+        # Same hue, ramping brightness — the color still carries the level, the
+        # animation carries "charging".
+        px = FakePixel()
+        led = StatusLED(_BatteryHub(), pixel=px)
+        led.update(10.0, usb=0)  # learn a real level first: red
+        led.update(10.0, usb=1)
+        px.fills.clear()
+        for ms in range(0, PULSE_PERIOD_MS, 50):
+            led.pulse(ms)
+        self.assertTrue(px.fills)
+        # Every frame is red at some brightness, never another hue.
+        for r, g, b in px.fills:
+            self.assertEqual((g, b), (0, 0))
+            self.assertLessEqual(r, RED[0])
+        self.assertGreater(max(f[0] for f in px.fills), min(f[0] for f in px.fills))
+
+    def test_the_pulse_never_goes_fully_dark(self):
+        # A ramp that hits zero reads as a fault, and loses the color for half
+        # the cycle.
+        levels = [pulse_level(ms) for ms in range(0, PULSE_PERIOD_MS, 10)]
+        self.assertGreater(min(levels), 0.0)
+        self.assertAlmostEqual(max(levels), 1.0)
+
+    def test_pulse_is_a_no_op_off_usb(self):
+        # The slot runs regardless; on battery it must not touch the pixel.
+        px = FakePixel()
+        led = StatusLED(_BatteryHub(), pixel=px)
+        led.update(90.0, usb=0)
+        px.fills.clear()
+        for ms in range(0, PULSE_PERIOD_MS, 50):
+            led.pulse(ms)
+        self.assertEqual(px.fills, [])
+
+    def test_usb_selects_the_animation_not_the_band(self):
+        # The regression this replaces: the LED used to cap the band while
+        # charging, which (the ceiling living in RAM, the board almost always
+        # booting plugged in) pinned it to yellow forever. `VOLTAGE_MONITOR`
+        # reads the battery terminal, not the charger — measured at 4.00 V/80 %
+        # and 4.09 V/90 % on two packs — so the reading is the band, plugged in
+        # or not.
+        for usb in (0, 1):
+            for pct, want in ((10.0, RED), (40.0, YELLOW), (90.0, GREEN)):
+                led = StatusLED(_BatteryHub(), pixel=FakePixel())
+                led.update(pct, usb=usb)
+                self.assertEqual(led._color, want, "pct=%s usb=%s" % (pct, usb))
+
+    def test_an_almost_full_pack_reads_green_while_charging(self):
+        # The user-visible bug: a nearly-full battery on the charger showed
+        # amber. It must show the band it actually is.
+        led = StatusLED(_BatteryHub(), pixel=FakePixel())
+        led.update(89.5, usb=1)  # the measured reading from the real board
+        self.assertEqual(led._color, GREEN)
+        self.assertTrue(led._charging)
+
+    def test_a_low_pack_still_reads_red_while_charging(self):
+        led = StatusLED(_BatteryHub(), pixel=FakePixel())
+        led.update(8.0, usb=1)
+        self.assertEqual(led._color, RED)
+
+    def test_the_battery_slot_does_not_stamp_over_a_ramp(self):
+        # `update` fires at 0.2 Hz mid-pulse; if it repainted full brightness
+        # every time, the ramp would glitch once every 5 s.
+        px = FakePixel()
+        led = StatusLED(_BatteryHub(), pixel=px)
+        led.update(10.0, usb=0)
+        led.update(10.0, usb=1)
+        led.pulse(PULSE_PERIOD_MS // 2)  # peak
+        led.pulse(PULSE_PERIOD_MS // 4 + PULSE_PERIOD_MS)  # partway down
+        px.fills.clear()
+        led.update(10.0, usb=1)  # same band, mid-ramp
+        self.assertEqual(px.fills, [])
+
+    def test_pulse_never_raises_on_a_failing_pixel(self):
+        class BadPixel:
+            def fill(self, color):
+                raise RuntimeError("pixel is on fire")
+
+            def show(self):
+                pass
+
+        led = StatusLED(_BatteryHub(), pixel=BadPixel())
+        led.update(50.0, usb=1)
+        led.pulse(0)  # must not raise
 
     def test_tick_survives_a_failing_battery_read(self):
         class BadHub:
