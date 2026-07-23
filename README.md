@@ -34,6 +34,9 @@ for motor-development metrics:
   [CanChild overview](https://canchild.ca/en/resources/44-gross-motor-function-measure-gmfm) ·
   [Physiopedia](https://www.physio-pedia.com/Gross_Motor_Function_Measure) ·
   [User's Manual (Mac Keith Press)](https://www.mackeith.co.uk/book/gross-motor-function-measure-gmfm-66-gmfm-88-users-manual-revised-3rd-edition/)
+
+Not currently used:
+
 - **PDMS-3 — Peabody Developmental Motor Scales, Third Edition.** Gross-motor
   subtests (Body Control, Body Transport, Object Control) plus fine-motor and a
   supplemental physical-fitness subtest.
@@ -63,9 +66,21 @@ for motor-development metrics:
       **continuous variable underneath it** (hold duration and postural sway; transition smoothness
       via SPARC; crawl cadence and left–right reciprocity). Label trials with `pixi run annotate`,
       then `pixi run metrics` / `notebooks/motor_metrics.ipynb`
-- [ ] extend the metrics to PDMS-3 and AIMS, and compute them in real time (Rerun overlay) as well
-      as offline. PDMS-3 needs the physical kit and examiner administration; AIMS norms stop at 18
-      months, so at 24 months Remy floors out on percentile (its item wording is still useful)
+- [x] compute metrics in real time (GUI overlay) as well as offline — **the tilt-robust,
+      trigger-free subset**: `pixi run live` (sway + trunk lean) / `pixi run live-crawl` (cadence +
+      cycle variability), or `--live-metrics` on `pose` and `rerun`. `motor_metrics/live.py` feeds a
+      rolling window to the *same* `hold_metrics`/`crawl_metrics` the offline table uses. Cost was
+      never the obstacle (~3 ms per recompute against a 33 ms frame); the constraints are that the
+      Savitzky-Golay fit leaves the last 3 samples extrapolated — so the readout is deliberately
+      100 ms old, where it equals the offline value *exactly* — and that without an annotator there
+      is no honest trial boundary, so the window is fixed and **nothing infers movement onset**.
+      SPARC, submovement counts and any duration metric are therefore still offline-only: they need
+      an onset/offset the code is not entitled to invent. Live values never enter the `.h5` or the
+      offline table (different window, different measurement)
+- [ ] child-facing live display — the same readout driving something motivating rather than a
+      numeric overlay. Note "held for N seconds" is *not* available (that is the loss-of-posture
+      inference `motor_metrics` refuses); "coverage green and trunk within X of its own baseline" is
+- [ ] refactor parts of CLAUDE.md into distributed rules, skills, hooks, commands, etc. All context is not needed for every prompt.
 - [ ] fuse the Feather Sense IMU into the metrics — blocked on camera↔IMU clock alignment: the
       recording stores the device clock (ms since board boot) but not its offset to the host
       timeline. Would give a true gravity vector (no level-camera assumption) and 100 Hz sway

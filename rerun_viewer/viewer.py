@@ -55,8 +55,33 @@ def _feather_grid() -> rrb.Grid:
     )
 
 
+# Live-metric views (added only when --live-metrics is on). Sway and cadence get their
+# own plots rather than a shared axis; `coverage` sits with them on purpose, because a
+# sway number is only readable next to the fraction of the window it was measured over.
+def _live_grid(mode: str) -> rrb.Grid:
+    quality = [
+        rrb.TimeSeriesView(origin="live/coverage", name="coverage (0-1)"),
+        rrb.TimeSeriesView(origin="live/tracked_s", name="tracked run (s)"),
+    ]
+    if mode == "crawl":
+        views = [
+            rrb.TimeSeriesView(origin="live/cadence_cpm", name="cadence (cycles/min)"),
+            rrb.TimeSeriesView(origin="live/cycle_period_cv", name="cycle period CV"),
+        ]
+    else:
+        views = [
+            rrb.TimeSeriesView(origin="live/sway_rms_m", name="sway RMS (m)"),
+            rrb.TimeSeriesView(origin="live/sway_velocity_mps", name="sway velocity (m/s)"),
+            rrb.TimeSeriesView(origin="live/trunk_angle_delta_deg", name="trunk Δ from baseline (°)"),
+        ]
+    return rrb.Grid(*views, *quality, name="Live metrics")
+
+
 def _build_blueprint(
-    layout: str, feather: bool = False, annotations: bool = False
+    layout: str,
+    feather: bool = False,
+    annotations: bool = False,
+    live: str | None = None,
 ) -> rrb.Blueprint:
     camera_view = rrb.Spatial2DView(origin="video/image", name="Camera + pose")
     # One plot per joint so angles aren't overlaid on a shared axis.
@@ -70,6 +95,8 @@ def _build_blueprint(
     annotations_view = rrb.TextLogView(origin="annotations", name="Annotations")
     if layout == "tabs":
         views = [camera_view, plots]
+        if live:
+            views.append(_live_grid(live))
         if feather:
             views.append(_feather_grid())
         if annotations:
@@ -79,9 +106,9 @@ def _build_blueprint(
         main = rrb.Horizontal(camera_view, plots, column_shares=[1, 1], name="Camera + angles")
         # Keep the camera/angles split; put the sensor plots on a second tab so
         # they don't crowd the video.
-        extra = ([_feather_grid()] if feather else []) + (
-            [annotations_view] if annotations else []
-        )
+        extra = ([_live_grid(live)] if live else []) + (
+            [_feather_grid()] if feather else []
+        ) + ([annotations_view] if annotations else [])
         root = rrb.Tabs(main, *extra) if extra else main
     return rrb.Blueprint(root, collapse_panels=True)
 
@@ -108,6 +135,7 @@ class PoseRerunLogger:
         layout: str = "split",
         feather: bool = False,
         annotations: bool = False,
+        live: str | None = None,
     ) -> None:
         self._jpeg_quality = int(jpeg_quality)
         # Offset mapping the device's monotonic ms clock onto the session time
@@ -126,7 +154,7 @@ class PoseRerunLogger:
         # this application_id (e.g. one the user rearranged by hand in an earlier
         # run) so the chosen --layout always takes effect.
         rr.send_blueprint(
-            _build_blueprint(layout, feather=feather, annotations=annotations),
+            _build_blueprint(layout, feather=feather, annotations=annotations, live=live),
             make_active=True,
             make_default=True,
         )
@@ -178,6 +206,35 @@ class PoseRerunLogger:
         self._log_skeleton_2d(shape, result.pose_landmarks[0])
         # self._log_skeleton_3d(result.pose_world_landmarks[0])
         self._log_angles(result.pose_world_landmarks[0])
+
+    def log_live_metrics(self, metrics) -> None:
+        """Log a :class:`motor_metrics.live.LiveMetrics` readout as time series.
+
+        Called right after ``log_frame``, so it inherits the timeline position already
+        set there and each point lands on the frame it describes.
+
+        NaN fields are skipped rather than logged, which is what makes the blanking rule
+        visible: while coverage is below the gate the metric plots simply stop advancing,
+        instead of drawing a flat line that looks like a steady measurement of a child
+        the tracker has actually lost. ``coverage`` itself keeps logging throughout — it
+        is the signal explaining the gap.
+        """
+        quality = {
+            "coverage": metrics.live_coverage,
+            "tracked_s": metrics.live_tracked_s,
+        }
+        measured = {
+            "sway_rms_m": metrics.live_sway_rms_m,
+            "sway_ml_rms_m": metrics.live_sway_ml_rms_m,
+            "sway_ap_rms_m": metrics.live_sway_ap_rms_m,
+            "sway_velocity_mps": metrics.live_sway_velocity_mps,
+            "trunk_angle_delta_deg": metrics.live_trunk_angle_delta_deg,
+            "cadence_cpm": metrics.live_cadence_cpm,
+            "cycle_period_cv": metrics.live_cycle_period_cv,
+        }
+        for name, value in (*quality.items(), *measured.items()):
+            if value == value:  # skip NaN, as _log_angles does
+                rr.log(f"live/{name}", rr.Scalars(float(value)))
 
     def log_sensors(self, records, elapsed_s: float) -> None:
         """Log a batch of Feather Sense SensorRecords as time series.

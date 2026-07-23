@@ -41,6 +41,7 @@ from scipy.signal import find_peaks, hilbert
 from .derive import FS, resample_uniform, smooth
 from .hold import path_length
 from .quality import TORSO, WRISTS, Gate, coverage, landmarks_ok, longest_run
+from .segments import Span
 from .signals import com_norm, mid, trunk_vector
 from .transition import symmetry_index
 
@@ -208,7 +209,7 @@ def crawl_metrics(rec, seg, *, gate: Gate = Gate()) -> CrawlMetrics:
     r0, r1 = longest_run(ok, seg.start, seg.stop)
     tracked_s = _span_seconds(ts, r0, r1)
 
-    run = _Span(r0, r1)
+    run = Span(r0, r1)
     left = _prepared(rec, run, "left", ts)
     right = _prepared(rec, run, "right", ts)
 
@@ -231,13 +232,6 @@ def crawl_metrics(rec, seg, *, gate: Gate = Gate()) -> CrawlMetrics:
         amplitude_symmetry=_amplitude_symmetry(left, right),
         speed_norm_per_s=_speed_norm(rec, r0, r1, tracked_s),
     )
-
-
-class _Span:
-    """Minimal duck-type of Segment for the internal limb_signal calls."""
-
-    def __init__(self, start: int, stop: int) -> None:
-        self.start, self.stop = start, stop
 
 
 def _prepared(rec, span, side: str, ts: np.ndarray) -> np.ndarray:

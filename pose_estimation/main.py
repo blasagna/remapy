@@ -20,6 +20,8 @@ import cv2
 import numpy as np
 
 from face_blur.factory import BLUR_METHODS, build_blurrer
+from motor_metrics.live import MODE_WINDOW_S, MODES, LiveMetricsComputer
+from motor_metrics.live_draw import draw_live_metrics
 from video_capture.capture import CaptureError, VideoCapture
 
 from .angles import joint_angles
@@ -72,6 +74,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "tracked); detector = standalone FaceDetector only.",
     )
     parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
+    parser.add_argument(
+        "--live-metrics",
+        choices=("off",) + MODES,
+        default="off",
+        help="Show motor metrics computed live over a trailing window, top-right. "
+        "hold = sway + trunk lean; crawl = cadence + cycle variability (needs no "
+        "vertical reference, so it survives a tilted camera). Default: off. Live "
+        "values are NOT the offline table's values -- see motor_metrics/live.py.",
+    )
+    parser.add_argument(
+        "--live-window-s",
+        type=float,
+        default=None,
+        help="Trailing window for --live-metrics, in seconds "
+        f"(defaults: {', '.join(f'{k}={v:g}' for k, v in MODE_WINDOW_S.items())}).",
+    )
     return parser.parse_args(argv)
 
 
@@ -109,6 +127,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.blur_faces
         else None
     )
+    live = (
+        LiveMetricsComputer(args.live_metrics, window_s=args.live_window_s)
+        if args.live_metrics != "off"
+        else None
+    )
     try:
         with VideoCapture(source, width=args.width, height=args.height) as cap, \
                 PoseEstimator(model_path=args.model) as pose:
@@ -142,6 +165,15 @@ def main(argv: list[str] | None = None) -> int:
                         draw_angles(frame, angles)
                 elif args.no_window:
                     print(f"frame {count}: no pose detected")
+
+                if live is not None:
+                    # Pushed for every frame, pose or not: a dropout is part of the
+                    # window's coverage, and skipping those frames would quietly
+                    # inflate it into a claim that tracking held throughout.
+                    metrics = live.push(timestamp_ms, result)
+                    if not args.no_window:
+                        # Top-right; draw_angles owns the top-left corner.
+                        draw_live_metrics(frame, metrics, origin=(frame.shape[1] - 250, 32))
 
                 if not args.no_window:
                     cv2.imshow(WINDOW_NAME, frame)

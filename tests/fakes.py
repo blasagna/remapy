@@ -61,6 +61,33 @@ def pose_result(poses_norm=None, poses_world=None):
     )
 
 
+#: A result with no pose, as MediaPipe emits when it finds nothing.
+NO_POSE = pose_result()
+
+
+def pose_result_from_row(world_row, norm_row=None, *, visibility=1.0):
+    """A pose result carrying one frame of a ``body_world``-style ``(33, 3)`` array.
+
+    The bridge between the array-shaped fakes (which describe *anatomy*) and the
+    result-shaped ones (which describe what the *model emits*). Live code consumes the
+    latter — ``motor_metrics.live.LiveWindow.push`` takes a result, not rows — so a
+    test that wants a synthetic body moving through a live buffer needs this to convert
+    between them. ``norm_row`` defaults to ``world_row``, which is fine for anything
+    reading only world coordinates.
+    """
+    world_row = np.asarray(world_row, dtype=np.float64)
+    norm_row = world_row if norm_row is None else np.asarray(norm_row, dtype=np.float64)
+    world = [
+        FakeLandmark(x=float(p[0]), y=float(p[1]), z=float(p[2]), visibility=visibility)
+        for p in world_row
+    ]
+    norm = [
+        FakeLandmark(x=float(p[0]), y=float(p[1]), z=float(p[2]), visibility=visibility)
+        for p in norm_row
+    ]
+    return pose_result([norm], [world])
+
+
 # --------------------------------------------------------------------------- #
 # Recording stand-in
 # --------------------------------------------------------------------------- #

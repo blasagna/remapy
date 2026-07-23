@@ -62,6 +62,35 @@ _COORD_NOTE = (
 )
 
 
+def landmark_rows(result) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """One frame's MediaPipe result -> ``(norm, world, visibility, presence)`` rows.
+
+    A frame with no detected pose becomes **full-NaN rows**, and that is the whole
+    reason this is a shared function rather than an inline block: the NaN convention
+    is load-bearing downstream. ``Recording.pose_present`` and
+    ``motor_metrics.quality`` both key off it (a NaN landmark-0 x implies the whole
+    row is NaN), so any second implementation that filled zeros instead — or wrote
+    NaN coordinates but left visibility at 0.0 — would produce frames that read as
+    tracked while carrying nothing. Live buffers (``motor_metrics.live.LiveWindow``)
+    call this so they cannot drift from what gets recorded.
+    """
+    if result.pose_landmarks:
+        norm_lm = result.pose_landmarks[0]
+        world_lm = result.pose_world_landmarks[0]
+        return (
+            np.array([[lm.x, lm.y, lm.z] for lm in norm_lm], dtype=np.float32),
+            np.array([[lm.x, lm.y, lm.z] for lm in world_lm], dtype=np.float32),
+            np.array([lm.visibility for lm in norm_lm], dtype=np.float32),
+            np.array([lm.presence for lm in norm_lm], dtype=np.float32),
+        )
+    return (
+        np.full((NUM_LANDMARKS, 3), np.nan, dtype=np.float32),
+        np.full((NUM_LANDMARKS, 3), np.nan, dtype=np.float32),
+        np.full(NUM_LANDMARKS, np.nan, dtype=np.float32),
+        np.full(NUM_LANDMARKS, np.nan, dtype=np.float32),
+    )
+
+
 class HDF5Recorder:
     """Append per-frame signals to an HDF5 file; use as a context manager."""
 
@@ -163,18 +192,7 @@ class HDF5Recorder:
         self._vis.resize((i + 1, NUM_LANDMARKS))
         self._pres.resize((i + 1, NUM_LANDMARKS))
 
-        if result.pose_landmarks:
-            norm = result.pose_landmarks[0]
-            world = result.pose_world_landmarks[0]
-            self._lm_norm[i] = np.array([[lm.x, lm.y, lm.z] for lm in norm], dtype=np.float32)
-            self._lm_world[i] = np.array([[lm.x, lm.y, lm.z] for lm in world], dtype=np.float32)
-            self._vis[i] = np.array([lm.visibility for lm in norm], dtype=np.float32)
-            self._pres[i] = np.array([lm.presence for lm in norm], dtype=np.float32)
-        else:
-            self._lm_norm[i] = np.full((NUM_LANDMARKS, 3), np.nan, dtype=np.float32)
-            self._lm_world[i] = np.full((NUM_LANDMARKS, 3), np.nan, dtype=np.float32)
-            self._vis[i] = np.full(NUM_LANDMARKS, np.nan, dtype=np.float32)
-            self._pres[i] = np.full(NUM_LANDMARKS, np.nan, dtype=np.float32)
+        self._lm_norm[i], self._lm_world[i], self._vis[i], self._pres[i] = landmark_rows(result)
 
         if self._writer is not None:
             self._writer.write(frame_bgr)

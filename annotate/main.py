@@ -27,7 +27,7 @@ import argparse
 import cv2
 import numpy as np
 
-from pose_estimation.draw import draw_skeleton
+from pose_estimation.draw import FONT as _FONT, draw_skeleton, put_text as _put_text
 from recording.annotations import AnnotationStore
 from recording.reader import Recording
 
@@ -38,7 +38,6 @@ _STRIP_H = 50  # pixels of timeline strip drawn at the bottom of the frame
 _MAX_LANES = 4  # overlapping-segment rows before colors wrap
 _MAX_READOUT = 4  # active-label lines drawn before the rest are summarized
 _LEGEND_CHARS = 30  # label text is truncated to this in the legend row
-_FONT = cv2.FONT_HERSHEY_SIMPLEX
 # Stable-ish BGR palette; a label keeps its color for the session via _label_color.
 _PALETTE = [
     (0, 200, 255), (0, 255, 0), (255, 128, 0), (255, 0, 200),
@@ -66,12 +65,6 @@ def _label_color(label: str, colors: dict[str, tuple]) -> tuple:
     if label not in colors:
         colors[label] = _PALETTE[len(colors) % len(_PALETTE)]
     return colors[label]
-
-
-def _put_text(frame, text, org, scale, color, thickness=1) -> None:
-    """Draw text with a black outline so it stays readable over arbitrary footage."""
-    cv2.putText(frame, text, org, _FONT, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
-    cv2.putText(frame, text, org, _FONT, scale, color, thickness, cv2.LINE_AA)
 
 
 def _truncate(text: str, limit: int) -> str:

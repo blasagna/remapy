@@ -29,6 +29,21 @@ JOINT_COLOR_DIM = (0, 0, 90)
 # metrics will actually accept.
 MIN_VISIBILITY = 0.5
 
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def put_text(frame, text, org, scale, color, thickness: int = 1) -> None:
+    """Draw text with a black outline so it stays readable over arbitrary footage.
+
+    Both callers draw over whatever the camera happened to see — a recording being
+    scrubbed in ``annotate``, or a live frame under the metrics overlay — so plain
+    ``cv2.putText`` disappears against a bright wall or a light shirt. Lives here with
+    :func:`draw_skeleton` because this module is already the shared, mediapipe-free
+    OpenCV drawing surface.
+    """
+    cv2.putText(frame, text, org, FONT, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, text, org, FONT, scale, color, thickness, cv2.LINE_AA)
+
 
 def draw_skeleton(
     frame,

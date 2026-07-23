@@ -24,6 +24,27 @@ from .labels import ParsedLabel, parse_label
 
 
 @dataclass(frozen=True)
+class Span:
+    """A bare ``[start, stop)`` frame span, for metrics that read no label.
+
+    :class:`Segment` carries an annotation and a parsed label because a trial *is* a
+    labeled thing. But ``hold_metrics`` and ``crawl_metrics`` only ever read ``start``
+    and ``stop`` — the label reaches them through their own arguments, and only
+    ``transition_metrics`` reaches into ``seg.parsed``. So a caller that has a frame
+    range but no annotation (an internal sub-range, or a live rolling window with no
+    annotator at all) has something honest to pass, instead of fabricating an
+    ``Annotation`` that no human ever marked.
+    """
+
+    start: int
+    stop: int
+
+    @property
+    def n_frames(self) -> int:
+        return self.stop - self.start
+
+
+@dataclass(frozen=True)
 class Segment:
     """One trial: its annotation, its parsed label, and its ``[start, stop)`` frame span."""
 
