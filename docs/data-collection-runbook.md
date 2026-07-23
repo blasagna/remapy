@@ -113,6 +113,38 @@ Notes that matter for the numbers:
 - `gmfm=<item#>` is optional and free-text: copy the item number straight off the GMFM-88
   score sheet if you're tracking one. It's never validated, so any value is accepted.
 
+### GMFM-88 item lookup — fill in from the score sheet, once
+
+The code deliberately does **not** hard-code GMFM item numbers (`labels.py`: the numbering lives
+behind the manual, and a wrong constant compared across months is worse than none). So fill this
+table in **once**, against Remy's actual GMFM-88 score sheet (ideally with his PT), and reuse it
+every session instead of re-deriving the number at each `annotate` prompt. The dimension each
+exercise falls in (B = sitting, C = crawling, D = standing) is fixed by `labels.DIMENSIONS`; only
+the item number is yours to confirm.
+
+> **Verify the number *and its wording* before trusting it.** The "candidate item" column is the
+> commonly-published numbering as a starting point, **not** verified to the manual — confirm each
+> against the score sheet. Enter the item that matches what Remy *actually did*; the label's
+> `arms=`/`support=` fields and the `gmfm=` number must describe the **same** trial.
+
+> **`gmfm=` is optional and never affects a metric.** No quality gate or continuous-variable
+> analysis reads it (it appears nowhere in `motor_metrics/*.py` outside `labels.py`) — it rides
+> along only as a `p_gmfm` cross-reference to the score sheet. So a missing or unconfirmed number
+> must **never block a session**: record the exercise plus its `arms=`/`support=`/`side=`/`dir=`
+> fields (those *do* drive grouping), and add `gmfm=` later — `annotate` edits save in place, so
+> it can be filled in after the fact once confirmed.
+
+| Label you'll record | Dim | Candidate item (verify!) | Item wording (from your sheet) | **Confirmed item #** |
+|---|---|---|---|---|
+| `sit_hold;arms=free;support=none` | B | B24 (or B34 on a bench) | Sit on mat, arms free, maintains 3 s | `____` |
+| `sit_hold;arms=prop` | B | B23 | Sit on mat, arm-propping, maintains 5 s | `____` |
+| `sit_hold;support=trunk` | B | B21 / B22 | Sit, supported at thorax, head upright / midline, 3 s | `____` |
+| `transition;from=sit;to=prone` | B | B30 | Sit on mat, lowers self to prone with control | `____` |
+| `transition;from=prone;to=sit` | B | *depends on the movement* | Prone→sit; pick the item matching what he does | `____` |
+| `crawl;style=belly` | C | C39 | Prone, creeps/commando-crawls forward 1.8 m | `____` |
+| `stand_hold;support=furniture` | D | D48 | Standing, holding onto large bench with both hands | `____` |
+| `stand_hold;support=hands_held` | D | *held-standing item in D* | Standing, held by an adult | `____` |
+
 ---
 
 ## 4. After the session — annotate and label
