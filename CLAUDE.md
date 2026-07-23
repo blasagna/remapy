@@ -100,7 +100,11 @@ Streams the pipeline to the [Rerun](https://rerun.io) viewer.
   (`video/image`), a 3D skeleton from world landmarks (`pose3d`), and scalar line plots for
   frame rate + joint angles (`metrics/*`). Missing poses are cleared via `rr.Clear`. World
   coords are remapped (negate y/z) so the figure stands upright. Frames are JPEG-encoded
-  (`cv2.imencode` on BGR → `rr.EncodedImage`) to keep the viewer's in-memory store small.
+  (`cv2.imencode` on BGR → `rr.EncodedImage`) to keep the viewer's in-memory store small — unless
+  the caller passes already-encoded `jpeg_bytes` (+ `image_size`, since the 2D skeleton needs the
+  frame shape), which are logged verbatim; that is the replay path. `log_annotations()` logs
+  labeled segments as a text log that turns on at `start_ms` and clears at `end_ms`, placed on
+  **both** timelines so they show up whichever one you scrub.
 - **Memory note:** when spawning (not `--save`), the viewer holds the whole stream in RAM,
   evicting oldest data past its `memory_limit`. The logger calls `rr.spawn(memory_limit=...)`
   explicitly (the `init(spawn=True)` bool form can't forward the limit).
@@ -109,6 +113,18 @@ Streams the pipeline to the [Rerun](https://rerun.io) viewer.
   path only — a no-op under `--save`), `--jpeg-quality` (default `75`), and `--record PATH.h5`
   / `--record-video PATH.mp4` (write an HDF5 recording alongside — see `recording/`). Spawns
   the viewer by default.
+- `replay.py` — the **offline** direction: replays an existing HDF5 recording into Rerun, either
+  as a `.rrd` (`pixi run export-rrd session.h5 out.rrd`) or straight into the viewer
+  (`pixi run replay session.h5`) — same module, one optional positional output. Rebuilds the
+  duck-typed pose result from the stored landmark rows and feeds the **unmodified**
+  `PoseRerunLogger`, logging the archived JPEG blobs verbatim (`Recording.frame_jpeg`), so no
+  decode/re-encode round trip and no re-run of MediaPipe. Everything the file carries is replayed:
+  `/feather` streams turn on the sensor tab, `/annotations` the annotations tab.
+  **Only the raw feather streams are replayed** — the reader adds `gravity`/`linear_accel` on read
+  *and* the logger re-derives them from accel, so replaying the reader's copies would log each
+  twice (`_DERIVED_STREAMS`). **Sensor alignment is nominal:** the device-clock↔recording-clock
+  offset is never stored, so the first sample is anchored at the recording's `t=0`; relative
+  sensor timing is exact, video↔sensor alignment is not.
 - **Feather Sense (optional):** when the board is streaming (USB serial **or BLE**), the viewer
   also plots its sensors on a **"Feather Sense" tab** (accel/gyro/mag as x/y/z line plots, plus
   battery; `gravity`/`linear_accel` are **derived here** from each raw `accel` record via a
@@ -349,6 +365,9 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run record` — record webcam + pose to `recording.hdf5` for offline analysis.
 - `pixi run record-headless` — record 30 frames to `recording.hdf5` (bounded run).
 - `pixi run export-video <in.hdf5> <out.mp4> [--fps N]` — rebuild an mp4 from a recording's stored frames.
+- `pixi run export-rrd <in.hdf5> <out.rrd>` — convert a recording to a Rerun `.rrd` (video +
+  skeleton + angles, plus feather/annotations when present); open with `rerun out.rrd`.
+- `pixi run replay <in.hdf5>` — same conversion, straight into a spawned Rerun viewer.
 - `pixi run annotate <session.hdf5>` — scrub a recording and label time segments (edits saved in place).
 - `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
 
@@ -386,6 +405,12 @@ display, or GPU and runs in well under a second:
   share a timestamp. Plus **`CobsEncodeTests`/`EncodeXyzTests`** (byte-identity fuzz vs. the
   original encoders) and **`RateTrackerTests`** (the `--stats` arithmetic — it is the acceptance
   instrument, and it used to over-report ~10 %).
+- `tests/test_viewer.py` — the logger's calls (with `rr` mocked) plus **`ReplayRecordingTests`**,
+  which drives the real `HDF5Recorder` → `AnnotationStore` → `Recording` → `replay_recording` path
+  against temp files: one `video/image` per frame, `rr.Clear` on untracked frames, feather streams
+  logged once (the double-derive trap), annotations logged, and the blueprint reflecting what the
+  file actually carries. Blueprints have no useful `repr`, so assertions walk `root_container`
+  for view origins (`_origins`) rather than matching on strings.
 - `cv2.VideoCapture`/`VideoWriter` are patched; the native MediaPipe `PoseLandmarker`/
   `FaceDetector` are patched at their import site (`ensure_model` + the class) so no model loads;
   `urllib.request.urlretrieve` is patched in the `ensure_model` tests; the `rerun` SDK is patched

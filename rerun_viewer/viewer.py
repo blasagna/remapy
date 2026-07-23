@@ -55,7 +55,9 @@ def _feather_grid() -> rrb.Grid:
     )
 
 
-def _build_blueprint(layout: str, feather: bool = False) -> rrb.Blueprint:
+def _build_blueprint(
+    layout: str, feather: bool = False, annotations: bool = False
+) -> rrb.Blueprint:
     camera_view = rrb.Spatial2DView(origin="video/image", name="Camera + pose")
     # One plot per joint so angles aren't overlaid on a shared axis.
     plots = rrb.Grid(
@@ -64,16 +66,23 @@ def _build_blueprint(layout: str, feather: bool = False) -> rrb.Blueprint:
             for name in JOINT_TRIPLETS
         )
     )
+    # Only present when replaying a recording that carries labeled segments.
+    annotations_view = rrb.TextLogView(origin="annotations", name="Annotations")
     if layout == "tabs":
         views = [camera_view, plots]
         if feather:
             views.append(_feather_grid())
+        if annotations:
+            views.append(annotations_view)
         root = rrb.Tabs(*views, name="View")
     else:
         main = rrb.Horizontal(camera_view, plots, column_shares=[1, 1], name="Camera + angles")
         # Keep the camera/angles split; put the sensor plots on a second tab so
         # they don't crowd the video.
-        root = rrb.Tabs(main, _feather_grid()) if feather else main
+        extra = ([_feather_grid()] if feather else []) + (
+            [annotations_view] if annotations else []
+        )
+        root = rrb.Tabs(main, *extra) if extra else main
     return rrb.Blueprint(root, collapse_panels=True)
 
 
@@ -98,6 +107,7 @@ class PoseRerunLogger:
         jpeg_quality: int = 75,
         layout: str = "split",
         feather: bool = False,
+        annotations: bool = False,
     ) -> None:
         self._jpeg_quality = int(jpeg_quality)
         # Offset mapping the device's monotonic ms clock onto the session time
@@ -116,7 +126,9 @@ class PoseRerunLogger:
         # this application_id (e.g. one the user rearranged by hand in an earlier
         # run) so the chosen --layout always takes effect.
         rr.send_blueprint(
-            _build_blueprint(layout, feather=feather), make_active=True, make_default=True
+            _build_blueprint(layout, feather=feather, annotations=annotations),
+            make_active=True,
+            make_default=True,
         )
 
     def log_frame(
@@ -124,21 +136,36 @@ class PoseRerunLogger:
         frame_count: int,
         elapsed_s: float,
         fps: float,
-        frame_bgr: np.ndarray,
+        frame_bgr: np.ndarray | None,
         result,
+        jpeg_bytes: bytes | None = None,
+        image_size: tuple[int, int] | None = None,
     ) -> None:
-        """Log one processed frame to the current Rerun recording."""
+        """Log one processed frame to the current Rerun recording.
+
+        Live capture passes ``frame_bgr`` and the frame is JPEG-encoded here.
+        Replaying a stored recording instead passes the archived ``jpeg_bytes``
+        (logged verbatim, no decode/re-encode round trip) plus ``image_size`` as
+        ``(height, width)``, which the 2D skeleton needs to scale the normalized
+        landmarks; ``frame_bgr`` may then be ``None``.
+        """
         # Place everything at this point on both the frame and wall-clock timelines.
         rr.set_time(FRAME_TIMELINE, sequence=frame_count)
         rr.set_time(TIME_TIMELINE, duration=elapsed_s)
 
-        # JPEG-encode the frame to keep the viewer's in-memory store small. cv2
-        # encodes directly from BGR, so no color conversion is needed here.
-        ok, buf = cv2.imencode(
-            ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
-        )
-        if ok:
-            rr.log("video/image", rr.EncodedImage(contents=buf.tobytes(), media_type="image/jpeg"))
+        if jpeg_bytes is not None:
+            rr.log("video/image", rr.EncodedImage(contents=jpeg_bytes, media_type="image/jpeg"))
+        elif frame_bgr is not None:
+            # JPEG-encode the frame to keep the viewer's in-memory store small. cv2
+            # encodes directly from BGR, so no color conversion is needed here.
+            ok, buf = cv2.imencode(
+                ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
+            )
+            if ok:
+                rr.log(
+                    "video/image",
+                    rr.EncodedImage(contents=buf.tobytes(), media_type="image/jpeg"),
+                )
         rr.log("metrics/fps", rr.Scalars(fps))
 
         if not result.pose_landmarks:
@@ -147,7 +174,8 @@ class PoseRerunLogger:
             rr.log("pose3d", rr.Clear(recursive=True))
             return
 
-        self._log_skeleton_2d(frame_bgr.shape, result.pose_landmarks[0])
+        shape = image_size if image_size is not None else frame_bgr.shape
+        self._log_skeleton_2d(shape, result.pose_landmarks[0])
         # self._log_skeleton_3d(result.pose_world_landmarks[0])
         self._log_angles(result.pose_world_landmarks[0])
 
@@ -179,6 +207,29 @@ class PoseRerunLogger:
 
             if rec.name == "accel":
                 self._log_derived_motion(rec)
+
+    def log_annotations(self, annotations, timestamps_ms) -> None:
+        """Log labeled time segments as a text log that turns on and off.
+
+        Each segment writes its label under ``annotations/<label>`` at its start
+        and an ``rr.Clear`` at its end, so scrubbing shows which trials are
+        active. Segments are placed on *both* timelines — ``timestamps_ms`` (the
+        recording's per-frame clock, which the annotations share) maps each
+        boundary onto a frame index, so the labels are visible whichever timeline
+        the viewer is scrubbing.
+        """
+        ts = np.asarray(timestamps_ms)
+        if ts.size == 0:
+            return
+        t0 = float(ts[0])
+        for ann in annotations:
+            # "/" would silently nest the label into sub-entities; nothing else
+            # in the label vocabulary conflicts with an entity path.
+            path = f"annotations/{ann.label.replace('/', '_')}"
+            for boundary, entity in ((ann.start_ms, None), (ann.end_ms, rr.Clear(recursive=True))):
+                rr.set_time(FRAME_TIMELINE, sequence=int(np.searchsorted(ts, boundary)))
+                rr.set_time(TIME_TIMELINE, duration=(float(boundary) - t0) / 1000.0)
+                rr.log(path, entity if entity is not None else rr.TextLog(ann.label))
 
     def _log_derived_motion(self, accel_rec) -> None:
         """Log gravity / linear_accel derived from one raw accel record.
