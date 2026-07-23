@@ -138,6 +138,14 @@ class Recording:
         blob = self._f["video/jpeg"][i]
         return cv2.imdecode(np.frombuffer(bytes(blob), np.uint8), cv2.IMREAD_COLOR)
 
+    def frame_jpeg(self, i: int) -> bytes:
+        """Return the i-th frame's stored JPEG blob, undecoded.
+
+        For consumers that want the archived bytes verbatim (e.g. re-logging to
+        Rerun), avoiding a lossy decode/re-encode round trip.
+        """
+        return bytes(self._f["video/jpeg"][i])
+
     def frames(self):
         """Iterate decoded BGR frames."""
         for i in range(len(self)):
