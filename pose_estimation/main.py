@@ -17,11 +17,13 @@ import argparse
 import time
 
 import cv2
+import numpy as np
 
 from face_blur.factory import BLUR_METHODS, build_blurrer
 from video_capture.capture import CaptureError, VideoCapture
 
 from .angles import joint_angles
+from .draw import draw_skeleton
 from .estimator import POSE_CONNECTIONS, PoseEstimator
 
 WINDOW_NAME = "remapy pose_estimation"
@@ -79,13 +81,13 @@ def _resolve_source(source: str) -> int | str:
 
 
 def draw_pose(frame, pose_landmarks) -> None:
-    """Draw one pose's skeleton (normalized landmarks) onto a BGR frame."""
-    h, w = frame.shape[:2]
-    pts = [(int(lm.x * w), int(lm.y * h)) for lm in pose_landmarks]
-    for start, end in POSE_CONNECTIONS:
-        cv2.line(frame, pts[start], pts[end], (0, 255, 0), 2)
-    for x, y in pts:
-        cv2.circle(frame, (x, y), 3, (0, 0, 255), -1)
+    """Draw one pose's skeleton (normalized landmarks) onto a BGR frame.
+
+    Adapts MediaPipe's landmark objects to the array form ``draw_skeleton`` takes, so
+    the live CLI and the ``annotate`` scrubber share one drawing implementation.
+    """
+    pts = np.array([(lm.x, lm.y) for lm in pose_landmarks], dtype=np.float64)
+    draw_skeleton(frame, pts, POSE_CONNECTIONS)
 
 
 def draw_angles(frame, angles: dict[str, float]) -> None:

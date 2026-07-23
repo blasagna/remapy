@@ -234,3 +234,9 @@ face_blur/models/
 *.h5
 *.hdf5
 *.mp4
+
+# Claude Code local state. Shared project config (.claude/settings.json, agents/,
+# commands/, skills/) stays tracked; these two are per-machine. Worktrees especially:
+# they are full checkouts of this repo, so committing one nests the repo inside itself.
+.claude/worktrees/
+.claude/settings.local.json

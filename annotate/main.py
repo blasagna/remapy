@@ -17,6 +17,7 @@ Keys (also printed with '?'):
     i       mark the in-point at the playhead
     o       mark the out-point -> type a label in the terminal
     x       delete the annotation nearest the playhead
+    p       toggle the pose skeleton overlay
     ?       print this help
     q / Esc quit
 """
@@ -26,6 +27,7 @@ import argparse
 import cv2
 import numpy as np
 
+from pose_estimation.draw import draw_skeleton
 from recording.annotations import AnnotationStore
 from recording.reader import Recording
 
@@ -34,6 +36,9 @@ QUIT_KEYS = {ord("q"), 27}  # 'q' or Esc
 
 _STRIP_H = 50  # pixels of timeline strip drawn at the bottom of the frame
 _MAX_LANES = 4  # overlapping-segment rows before colors wrap
+_MAX_READOUT = 4  # active-label lines drawn before the rest are summarized
+_LEGEND_CHARS = 30  # label text is truncated to this in the legend row
+_FONT = cv2.FONT_HERSHEY_SIMPLEX
 # Stable-ish BGR palette; a label keeps its color for the session via _label_color.
 _PALETTE = [
     (0, 200, 255), (0, 255, 0), (255, 128, 0), (255, 0, 200),
@@ -63,6 +68,61 @@ def _label_color(label: str, colors: dict[str, tuple]) -> tuple:
     return colors[label]
 
 
+def _put_text(frame, text, org, scale, color, thickness=1) -> None:
+    """Draw text with a black outline so it stays readable over arbitrary footage."""
+    cv2.putText(frame, text, org, _FONT, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, text, org, _FONT, scale, color, thickness, cv2.LINE_AA)
+
+
+def _truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _spans_playhead(ann, playhead_ms: int) -> bool:
+    """Whether ``ann`` covers ``playhead_ms``. One definition, used by readout+delete."""
+    return ann.start_ms <= playhead_ms <= ann.end_ms
+
+
+def _active_labels(annotations, playhead_ms: int) -> list:
+    """Annotations covering the playhead, earliest first. Several may overlap."""
+    return sorted(
+        (a for a in annotations if _spans_playhead(a, playhead_ms)),
+        key=lambda a: a.start_ms,
+    )
+
+
+def _draw_readout(frame, annotations, playhead_ms, colors) -> None:
+    """Name the segment(s) under the playhead, each in that label's strip color."""
+    active = _active_labels(annotations, playhead_ms)
+    y = 52
+    for ann in active[:_MAX_READOUT]:
+        _put_text(frame, f"> {ann.label}", (10, y), 0.7,
+                  _label_color(ann.label, colors), 2)
+        y += 26
+    extra = len(active) - _MAX_READOUT
+    if extra > 0:
+        _put_text(frame, f"  +{extra} more", (10, y), 0.6, (200, 200, 200))
+
+
+def _draw_legend(frame, annotations, colors, strip_top: int, w: int) -> None:
+    """A swatch->label row above the strip, so every span color has a name."""
+    labels = list(dict.fromkeys(a.label for a in annotations))  # distinct, ordered
+    if not labels:
+        return
+    y = strip_top - 8
+    x = 10
+    for i, label in enumerate(labels):
+        text = _truncate(label, _LEGEND_CHARS)
+        (tw, _), _ = cv2.getTextSize(text, _FONT, 0.45, 1)
+        need = 14 + tw + 12
+        if x + need > w - 10:
+            _put_text(frame, f"+{len(labels) - i}", (x, y), 0.45, (200, 200, 200))
+            return
+        cv2.rectangle(frame, (x, y - 9), (x + 9, y), _label_color(label, colors), -1)
+        _put_text(frame, text, (x + 14, y), 0.45, (235, 235, 235))
+        x += need
+
+
 def _assign_lanes(annotations) -> dict[int, int]:
     """Greedy interval scheduling: map each annotation index -> a lane (row) number."""
     lane_index: dict[int, int] = {}
@@ -81,11 +141,19 @@ def _assign_lanes(annotations) -> dict[int, int]:
     return lane_index
 
 
-def _render(rec, frame_idx, in_point_ms, annotations, playing, colors):
+def _render(rec, frame_idx, in_point_ms, annotations, playing, colors,
+            show_pose=True, pose_present=None):
     """Draw one displayed frame: the video plus the timeline strip and status text."""
     frame = rec.frame(frame_idx).copy()
     h, w = frame.shape[:2]
     strip_top = h - _STRIP_H
+
+    # Skeleton goes on before the strip is painted, or limbs in the bottom _STRIP_H
+    # pixels would draw across the timeline instead of under it.
+    if show_pose and (pose_present is None or pose_present[frame_idx]):
+        draw_skeleton(frame, rec.landmarks_norm[frame_idx], rec.pose_connections,
+                      visibility=rec.visibility[frame_idx])
+
     t0 = int(rec.timestamps_ms[0])
     t1 = int(rec.timestamps_ms[-1])
     span = max(1, t1 - t0)
@@ -115,11 +183,14 @@ def _render(rec, frame_idx, in_point_ms, annotations, playing, colors):
     px = x_of(playhead_ms)
     cv2.line(frame, (px, strip_top), (px, h), (0, 0, 255), 2)
 
-    # Status text (top-left).
+    # Status text (top-left), then the label(s) under the playhead beneath it.
     state = "PLAY" if playing else "PAUSE"
     pending = "  in-point set" if in_point_ms is not None else ""
-    text = f"{frame_idx + 1}/{len(rec)}  {playhead_ms} ms  [{state}]{pending}"
-    cv2.putText(frame, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    pose_off = "" if show_pose else "  pose off"
+    text = f"{frame_idx + 1}/{len(rec)}  {playhead_ms} ms  [{state}]{pending}{pose_off}"
+    _put_text(frame, text, (10, 24), 0.6, (255, 255, 255))
+    _draw_readout(frame, annotations, playhead_ms, colors)
+    _draw_legend(frame, annotations, colors, strip_top, w)
     return frame
 
 
@@ -158,7 +229,7 @@ def _delete_nearest(store, rec, frame_idx) -> None:
     playhead = int(rec.timestamps_ms[frame_idx])
 
     def dist(a):
-        if a.start_ms <= playhead <= a.end_ms:
+        if _spans_playhead(a, playhead):
             return 0
         return min(abs(playhead - a.start_ms), abs(playhead - a.end_ms))
 
@@ -195,9 +266,14 @@ def main(argv: list[str] | None = None) -> int:
         jump = _jump_frames(rec)
         frame_delay_ms = max(1, int(round(1000.0 / jump)))
         colors: dict[str, tuple] = {}
+        show_pose = True
+        # pose_present is a property that re-slices the whole world array on each
+        # access; cache it once rather than paying that per rendered frame.
+        pose_present = rec.pose_present
 
         while True:
-            frame = _render(rec, frame_idx, in_point_ms, store.list(), playing, colors)
+            frame = _render(rec, frame_idx, in_point_ms, store.list(), playing, colors,
+                            show_pose, pose_present)
             cv2.imshow(WINDOW_NAME, frame)
             # waitKey(0) blocks (the paused state); waitKey(delay) advances while playing.
             key = cv2.waitKey(frame_delay_ms if playing else 0) & 0xFF
@@ -217,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
                 in_point_ms = None
             elif key == ord("x"):
                 _delete_nearest(store, rec, frame_idx)
+            elif key == ord("p"):
+                show_pose = not show_pose
             elif key == ord("?"):
                 print(HELP_TEXT)
 

@@ -4,6 +4,7 @@ These fakes avoid every heavyweight/external dependency in the test suite:
 
 - :class:`FakeLandmark` / pose-result builders replace MediaPipe's landmark and
   ``PoseLandmarkerResult`` objects (duck-typed: only attribute access is used).
+- :func:`fake_recording` replaces ``recording.reader.Recording``.
 - :class:`FakeCapture` replaces an opened ``cv2.VideoCapture`` handle.
 - :class:`FakeVideoWriter` replaces ``cv2.VideoWriter``.
 
@@ -57,6 +58,110 @@ def pose_result(poses_norm=None, poses_world=None):
     return SimpleNamespace(
         pose_landmarks=poses_norm or [],
         pose_world_landmarks=poses_world or [],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Recording stand-in
+# --------------------------------------------------------------------------- #
+NUM_LANDMARKS = 33
+
+# MediaPipe PoseLandmark indices, spelled out so the fakes need no mediapipe import.
+_L_SHOULDER, _R_SHOULDER = 11, 12
+_L_WRIST, _R_WRIST = 15, 16
+_L_HIP, _R_HIP = 23, 24
+
+
+def body_world(
+    trunk,
+    *,
+    hip_center=None,
+    shoulder_width=0.25,
+    hip_width=0.18,
+    left_wrist=None,
+    right_wrist=None,
+):
+    """``(N, 33, 3)`` world landmarks for a synthetic body.
+
+    ``make_landmarks`` spreads points along a diagonal, which is fine for pass-through
+    tests but is not a body — postural metrics need real anatomy. Here ``trunk`` is an
+    ``(N, 3)`` pelvis -> mid-shoulder vector per frame; hips are placed symmetrically
+    about ``hip_center`` (default the origin, mirroring MediaPipe's hip-centered world
+    frame) and shoulders symmetrically about ``hip_center + trunk``, separated along
+    world x. ``left_wrist``/``right_wrist`` are absolute ``(N, 3)`` positions.
+    Unnamed landmarks stay at the origin.
+    """
+    trunk = np.atleast_2d(np.asarray(trunk, dtype=np.float32))
+    count = trunk.shape[0]
+    hips = np.zeros((count, 3), np.float32) if hip_center is None else np.broadcast_to(
+        np.asarray(hip_center, dtype=np.float32), (count, 3)
+    )
+    shoulders = hips + trunk
+
+    out = np.zeros((count, NUM_LANDMARKS, 3), dtype=np.float32)
+    half_x = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    out[:, _L_HIP] = hips + half_x * (hip_width / 2)
+    out[:, _R_HIP] = hips - half_x * (hip_width / 2)
+    out[:, _L_SHOULDER] = shoulders + half_x * (shoulder_width / 2)
+    out[:, _R_SHOULDER] = shoulders - half_x * (shoulder_width / 2)
+    if left_wrist is not None:
+        out[:, _L_WRIST] = np.asarray(left_wrist, dtype=np.float32)
+    if right_wrist is not None:
+        out[:, _R_WRIST] = np.asarray(right_wrist, dtype=np.float32)
+    return out
+
+
+def fake_recording(
+    world=None,
+    *,
+    norm=None,
+    visibility=1.0,
+    presence=1.0,
+    timestamps_ms=None,
+    pose_present=None,
+    annotations=None,
+    n=None,
+    fps=30.0,
+):
+    """Duck-typed stand-in for :class:`recording.reader.Recording`.
+
+    Carries only what the :mod:`motor_metrics` functions read, so their tests need no
+    HDF5 file: ``landmarks_world``, ``landmarks_norm``, ``visibility``, ``presence``,
+    ``pose_present``, ``timestamps_ms``, ``annotations``.
+
+    ``world``/``norm`` are ``(N, 33, 3)`` arrays (default zeros). ``visibility`` and
+    ``presence`` take either a scalar (broadcast across all landmarks) or a full
+    ``(N, 33)`` array. ``timestamps_ms`` defaults to a uniform ``fps`` grid.
+    ``pose_present`` defaults to mirroring the real property exactly — the whole-row
+    NaN check on landmark 0 — so a test can build no-pose frames by writing NaN rows
+    and get the real semantics for free.
+    """
+    if world is None:
+        world = np.zeros((n if n is not None else 10, NUM_LANDMARKS, 3), dtype=np.float32)
+    world = np.asarray(world, dtype=np.float32)
+    count = world.shape[0]
+    if norm is None:
+        norm = np.zeros_like(world)
+
+    def _per_landmark(value):
+        arr = np.asarray(value, dtype=np.float32)
+        if arr.ndim == 0:
+            arr = np.full((count, NUM_LANDMARKS), float(arr), dtype=np.float32)
+        return arr
+
+    if timestamps_ms is None:
+        timestamps_ms = (np.arange(count) * (1000.0 / fps)).astype(np.int64)
+    if pose_present is None:
+        pose_present = ~np.isnan(world[:, 0, 0])
+
+    return SimpleNamespace(
+        landmarks_world=world,
+        landmarks_norm=np.asarray(norm, dtype=np.float32),
+        visibility=_per_landmark(visibility),
+        presence=_per_landmark(presence),
+        timestamps_ms=np.asarray(timestamps_ms, dtype=np.int64),
+        pose_present=np.asarray(pose_present, dtype=bool),
+        annotations=list(annotations or []),  # Recording defaults this to [] too
     )
 
 

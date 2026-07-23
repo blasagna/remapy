@@ -55,7 +55,20 @@ for motor-development metrics:
 - [x] baseline IMU signal stats at rest — see
       [Sensors](adafruit_feather_sense/README.md#sensors) (accel RMS σ ≈ 0.0102 m/s², gyro
       ≈ 0.0021 rad/s at the shipped ODR 208)
-- [ ] implement metrics from standard exercises and scoring defined in GMFM-88, Peabody Developmental Motor Scales (PDMS-3), and Alberta Infant Motor Scale (AIMS): real-time and offline with notebook exploration
+- [x] implement metrics from standard exercises and scoring defined in GMFM-88 — **four trials
+      (sitting hold, sit↔prone transition, belly crawl, supported standing), offline, camera-only**.
+      The instruments score *ordinally* (GMFM items are 0–3), which is too coarse to show change:
+      Remy can sit at a "2" for a year while genuinely improving. So the items are not
+      reimplemented — each one defines a reproducible *trial*, and `motor_metrics/` measures the
+      **continuous variable underneath it** (hold duration and postural sway; transition smoothness
+      via SPARC; crawl cadence and left–right reciprocity). Label trials with `pixi run annotate`,
+      then `pixi run metrics` / `notebooks/motor_metrics.ipynb`
+- [ ] extend the metrics to PDMS-3 and AIMS, and compute them in real time (Rerun overlay) as well
+      as offline. PDMS-3 needs the physical kit and examiner administration; AIMS norms stop at 18
+      months, so at 24 months Remy floors out on percentile (its item wording is still useful)
+- [ ] fuse the Feather Sense IMU into the metrics — blocked on camera↔IMU clock alignment: the
+      recording stores the device clock (ms since board boot) but not its offset to the host
+      timeline. Would give a true gravity vector (no level-camera assumption) and 100 Hz sway
 - [ ] program feather sense in C++ with Zephyr RTOS, or embedded Rust (embassy-nrf and nrf-hal)
 - [ ] program feather sense in embedded Rust (embassy-nrf and nrf-hal). Use schematics from adafruit to build BSP.
 - [ ] port to Android 
