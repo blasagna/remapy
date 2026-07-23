@@ -247,8 +247,10 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   harder here: every number is a function of the `derive.py` constants, so freezing metrics into
   the `.h5` would strand them at whatever those were that week. `Recording.angles()` is the pattern.
 - `labels.py` — the annotation vocabulary, `exercise[;key=value]*` (`sit_hold;arms=free;gmfm=23`).
-  Typed by hand at `annotate`'s prompt; **`annotate/main.py` is unchanged** (it stores free text —
-  this is a read-side convention). `parse_label` is **total**: returns `None` on legacy free text,
+  Typed by hand at `annotate`'s prompt; **`annotate` never parses the vocabulary** — it stores and
+  displays labels as free text, so this stays a purely read-side convention (the GUI's on-screen
+  label readout shows them verbatim, it does not validate them). `parse_label` is **total**:
+  returns `None` on legacy free text,
   never raises. Value checking is separate and advisory (`label_warnings`) because a typo'd
   `arms=freee` must not raise mid-report but must not pass silently either — it would become its
   own `groupby` bucket and split a baseline. GMFM item *numbers* are deliberately not hard-coded
@@ -416,8 +418,7 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   never raises (an escaping error would trip the BLE re-advertise handler) and writes the pixel
   only when the band changes. `board`/`neopixel` are imported in `__init__`, not at module scope,
   so a board missing the lib degrades to no LED instead of a crash loop — and `band_for` plus the
-  write path (via an injected `pixel`) stay host-importable and unit-tested. Caveat:
-  `VOLTAGE_MONITOR` reads the *charge* voltage on USB, so it generally shows green when plugged in.
+  write path (via an injected `pixel`) stay host-importable and unit-tested.
 - **Shared** (board + host, pure `struct`): `feather_protocol.py` — a **TLV-over-COBS** wire
   protocol. Each sample is one COBS-framed record `[type][len][timestamp_u32][int32…]`
   terminated by `0x00`; **no floats on the wire** — values are scaled fixed-point int32 (shared
@@ -495,7 +496,7 @@ rather than run ad hoc.
 
 `tests/` holds `unittest` coverage for the reusable libraries (not the CLIs). Run with `pixi run
 test`. Every external boundary is mocked so the suite needs no camera, network, model download,
-display, or GPU and runs in well under a second:
+display, or GPU; ~480 tests run in a few seconds:
 
 - `tests/fakes.py` — shared duck-typed stand-ins: MediaPipe landmark/pose/detection results, an
   opened `cv2.VideoCapture` (`FakeCapture`), `cv2.VideoWriter` (`FakeVideoWriter`), and a
