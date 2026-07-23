@@ -45,6 +45,17 @@ Body-pose skeleton + joint angles, using `video_capture` for frames.
   is the skeleton edge list.
 - `angles.py` — `joint_angles()` derives elbow/shoulder/knee/hip angles from
   `pose_world_landmarks` (metric coords; MediaPipe does not output angles itself).
+- `draw.py` — `draw_skeleton(frame, landmarks_norm, connections, visibility=None,
+  min_visibility=0.5)`, the one OpenCV skeleton drawer, shared by the live CLI and `annotate`.
+  Takes a plain `(K, 2+)` **numpy** array (not MediaPipe objects) and **imports no mediapipe**,
+  which is the point: a recording already stores its edge list in `meta/pose_connections`, so
+  `annotate` can draw poses without pulling the whole MediaPipe stack in for a 35-pair constant.
+  Adds the two behaviours the live path never needed — it **skips NaN** points/bones (the
+  recorder writes full-NaN rows for untracked frames and `annotate` scrubs across them;
+  `int(nan)` raises), and **dims** landmarks below `min_visibility`, since MediaPipe
+  *extrapolates* occluded points rather than dropping them and an invented coordinate otherwise
+  looks identical to a measured one. The threshold matches `motor_metrics.quality.Gate`, so what
+  looks solid is what the metrics will accept. `main.py:draw_pose` is a thin adapter over it.
 - `main.py` — CLI (`python -m pose_estimation.main`); same flags as `video_capture.main`, plus
   `--model`. Windowed mode overlays skeleton + angles; `--no-window` prints angles.
 
@@ -175,7 +186,22 @@ labels to time segments (stored via `recording.annotations.AnnotationStore`).
   Displays `Recording.frame(i)` (already face-blurred) with a bottom timeline strip showing the
   playhead and existing segments as colored, lane-stacked spans. Keys: `,`/`.` step a frame,
   `<`/`>` jump ~1s, `space` play/pause, `i`/`o` mark in/out (then type a label at the terminal
-  prompt), `x` delete the nearest segment, `?` help, `q`/`Esc` quit. Edits save immediately.
+  prompt), `x` delete the nearest segment, `p` toggle the pose overlay, `?` help, `q`/`Esc` quit.
+  Edits save immediately.
+- **Labels are named on screen, not just colored.** `_active_labels()` names the segment(s) under
+  the playhead in that label's own strip color, and a swatch→label legend sits above the strip.
+  Color alone was never enough: the `motor_metrics.labels` vocabulary makes trials differ only by
+  their params (`arms=free` vs `arms=prop`), so spans that matter are near-identical. Text is
+  drawn with a black outline (`_put_text`) because it lands over arbitrary footage. Overlapping
+  segments are normal, so the readout is a list.
+- **Pose overlay (`p`, default on)** — draws the stored landmarks via
+  `pose_estimation.draw.draw_skeleton`, using `rec.pose_connections` from the file (no mediapipe
+  import). It is **drawn before the strip rectangle** — the strip is painted *over* the bottom
+  `_STRIP_H` px of the same image, so drawing after would run limbs across the timeline (pinned
+  by an equality check on the strip region with the overlay on vs off). Dimmed limbs mark
+  low-visibility/extrapolated landmarks, which is the QC signal the data-collection runbook asks
+  the operator to eyeball. `main()` caches `rec.pose_present` **once** — it is a property that
+  re-slices the whole `(N,33,3)` world array on every access.
 - **HDF5 locking note:** the tool holds two handles on the same file — `AnnotationStore` (`"r+"`)
   and `Recording` (`"r"`). h5py requires the **`"r+"` handle be opened first**; opening `"r"`
   before `"r+"` on one path in one process raises `OSError`. `main()` opens the store before the
@@ -469,6 +495,13 @@ display, or GPU and runs in well under a second:
   shorter-than-window / fully-untracked segments — all must return NaN, never raise, since one
   mis-marked annotation must not take down a 40-row report. Integration tests drive the real
   `HDF5Recorder` → `AnnotationStore` → `Recording` → `metrics_table` path against temp files.
+- `tests/test_annotate.py` — the `annotate` GUI's drawable logic (the loop itself, needing a
+  window and keyboard, is not tested). `draw_skeleton` against real numpy/cv2: all-NaN rows
+  no-op, partial NaN skips only the affected bones, `(0.5, 0.5)` lands on the frame center, and
+  low visibility dims (a bone taking the *weaker* of its two endpoints). Plus `_active_labels`
+  (inclusive boundaries, overlapping spans, empty gaps) and `_render` smoke tests over a fake
+  `Recording` for pose on/off, untracked frames, and with/without annotations — one mis-marked
+  annotation or one untracked frame must not take down the window.
 - `tests/test_feather.py` — the Feather Sense host integration: `FeatherSenseStream` decode/poll
   and `open_if_available` probe (via `FakeSerial`), the shared `FrameRecordDecoder`, the
   `open_feather` transport dispatch (serial/ble backends mocked — no real radio), the host
