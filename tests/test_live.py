@@ -19,7 +19,7 @@ Three pins here earn their keep beyond ordinary coverage:
 
 import time
 import unittest
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import numpy as np
 
@@ -36,7 +36,14 @@ from motor_metrics.live import (
     live_field_names,
     trunk_angle_now,
 )
-from motor_metrics.live_draw import _fmt, _rows, draw_live_metrics
+from motor_metrics.live_draw import (
+    STEADINESS_TOL_DEG,
+    _fmt,
+    _quality_color,
+    _rows,
+    draw_live_metrics,
+    sit_steadiness,
+)
 from motor_metrics.report import _LEAD_COLUMNS
 from motor_metrics.transition import TransitionMetrics
 from tests.fakes import NO_POSE, body_world, pose_result_from_row
@@ -431,6 +438,54 @@ class LiveDrawTests(unittest.TestCase):
         self.assertEqual(blank.live_coverage, 0.0)
         draw_live_metrics(frame, blank)  # must not raise; coverage explains the dashes
         self.assertLess(blank.live_coverage, MIN_COVERAGE)
+
+
+class SitSteadinessTests(unittest.TestCase):
+    """The sit-hold continuum. Pinned to its closed form and its honesty properties."""
+
+    def _hold(self, delta_deg, *, valid=True):
+        """A valid hold readout carrying a given trunk deviation from baseline."""
+        blank = LiveMetricsComputer("hold").push(0, NO_POSE)
+        return replace(blank, live_valid=valid, live_trunk_angle_delta_deg=delta_deg)
+
+    def test_on_baseline_is_full(self):
+        self.assertEqual(sit_steadiness(self._hold(0.0)), 1.0)
+
+    def test_half_tolerance_is_half(self):
+        self.assertAlmostEqual(sit_steadiness(self._hold(STEADINESS_TOL_DEG / 2)), 0.5)
+
+    def test_at_or_past_tolerance_is_empty_never_negative(self):
+        self.assertEqual(sit_steadiness(self._hold(STEADINESS_TOL_DEG)), 0.0)
+        self.assertEqual(sit_steadiness(self._hold(3 * STEADINESS_TOL_DEG)), 0.0)
+
+    def test_direction_of_lean_does_not_matter(self):
+        """Deviation either side of the baseline is equally unsteady."""
+        d = STEADINESS_TOL_DEG / 3
+        self.assertEqual(sit_steadiness(self._hold(d)), sit_steadiness(self._hold(-d)))
+
+    def test_blanked_or_nan_readout_draws_nothing(self):
+        """None, not a stale bar — the blanking rule the whole overlay follows."""
+        self.assertIsNone(sit_steadiness(self._hold(0.0, valid=False)))
+        self.assertIsNone(sit_steadiness(self._hold(float("nan"))))
+        self.assertIsNone(sit_steadiness(None))
+
+    def test_only_hold_has_a_steadiness_meter(self):
+        """Crawl reads no vertical at all; a lean bar would be meaningless there."""
+        crawl = LiveMetricsComputer("crawl").push(0, NO_POSE)
+        self.assertIsNone(sit_steadiness(replace(crawl, live_valid=True)))
+
+    def test_color_runs_red_through_yellow_to_green(self):
+        self.assertEqual(_quality_color(0.0), (0, 0, 255))    # red
+        self.assertEqual(_quality_color(0.5), (0, 255, 255))  # yellow
+        self.assertEqual(_quality_color(1.0), (0, 255, 0))    # green
+
+    def test_meter_draws_only_for_a_valid_hold(self):
+        """The bar is extra pixels: a valid hold must draw more than a blanked one."""
+        good = np.zeros((240, 320, 3), dtype=np.uint8)
+        blank = np.zeros((240, 320, 3), dtype=np.uint8)
+        draw_live_metrics(good, self._hold(0.0))
+        draw_live_metrics(blank, LiveMetricsComputer("hold").push(0, NO_POSE))
+        self.assertGreater(int(good.astype(bool).sum()), int(blank.astype(bool).sum()))
 
 
 if __name__ == "__main__":

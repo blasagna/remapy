@@ -336,6 +336,16 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   **Loop order is load-bearing** in `rerun_viewer/main.py`: the recorder archives the clean blurred
   frame *before* `draw_live_metrics` runs, because the overlay mutates in place and a HUD burned
   into a recording would show numbers the offline metrics legitimately disagree with.
+  **Overlay text is plain cyan** (a single `cv2.putText`, matching `pose_estimation.main.draw_angles`)
+  — deliberately *not* the outlined `draw.put_text`, whose black under-copy reads as a drop shadow the
+  joint-angle overlay lacks; coverage stays green/red and `up:` orange, the two colors that carry
+  meaning. **`sit_steadiness`/`_draw_meter`** add the first child-facing piece: a red→green fill bar
+  giving good-vs-bad sit-hold feedback on a continuum. Its honesty is in *what it reads* — the
+  trunk's deviation from its **own** window baseline (`live_trunk_angle_delta_deg`), so a tilted
+  camera shifts the baseline not the score, and never an absolute upright angle or a "good posture"
+  threshold (the loss-of-posture criterion `hold.py` refuses). `STEADINESS_TOL_DEG` is a display/game
+  tolerance, not a validated threshold — it lives in the render layer (`live.py` stays pure
+  buffer-and-dispatch and computes no metric of its own). Crawl gets no meter (it reads no vertical).
 - `report.py` / `main.py` — `metrics_table(rec)` → one row per trial, columns the **union** across
   exercises (so they concatenate into a trend); `session_table(paths)` for the cross-session view,
   which is the whole point given there is no external GMFM score to calibrate against. Label params
