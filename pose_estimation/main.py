@@ -20,10 +20,12 @@ import cv2
 import numpy as np
 
 from face_blur.factory import BLUR_METHODS, build_blurrer
+from motor_metrics.live import MODE_WINDOW_S, MODES, LiveMetricsComputer
+from motor_metrics.live_draw import draw_live_metrics
 from video_capture.capture import CaptureError, VideoCapture
 
 from .angles import joint_angles
-from .draw import draw_skeleton
+from .draw import FONT, draw_skeleton, shade_box
 from .estimator import POSE_CONNECTIONS, PoseEstimator
 
 WINDOW_NAME = "remapy pose_estimation"
@@ -72,6 +74,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "tracked); detector = standalone FaceDetector only.",
     )
     parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
+    parser.add_argument(
+        "--live-metrics",
+        choices=("off",) + MODES,
+        default="off",
+        help="Show motor metrics computed live over a trailing window, top-right. "
+        "hold = sway + trunk lean; crawl = cadence + cycle variability (needs no "
+        "vertical reference, so it survives a tilted camera). Default: off. Live "
+        "values are NOT the offline table's values -- see motor_metrics/live.py.",
+    )
+    parser.add_argument(
+        "--live-window-s",
+        type=float,
+        default=None,
+        help="Trailing window for --live-metrics, in seconds "
+        f"(defaults: {', '.join(f'{k}={v:g}' for k, v in MODE_WINDOW_S.items())}).",
+    )
     return parser.parse_args(argv)
 
 
@@ -91,12 +109,20 @@ def draw_pose(frame, pose_landmarks) -> None:
 
 
 def draw_angles(frame, angles: dict[str, float]) -> None:
-    """Overlay joint-angle readouts in the top-left corner."""
-    for i, (name, deg) in enumerate(angles.items()):
-        text = f"{name}: {deg:5.1f}" if deg == deg else f"{name}: n/a"  # deg==deg filters NaN
+    """Overlay joint-angle readouts in the top-left corner, over a shaded panel."""
+    texts = [
+        f"{name}: {deg:5.1f}" if deg == deg else f"{name}: n/a"  # deg==deg filters NaN
+        for name, deg in angles.items()
+    ]
+    if not texts:
+        return
+    x, y0, step, scale = 10, 20, 18, 0.5
+    text_w = max(cv2.getTextSize(t, FONT, scale, 1)[0][0] for t in texts)
+    shade_box(frame, (x - 6, y0 - 16), (x + text_w + 6, y0 + step * (len(texts) - 1) + 8))
+    for i, text in enumerate(texts):
         cv2.putText(
-            frame, text, (10, 20 + 18 * i),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA,
+            frame, text, (x, y0 + step * i),
+            FONT, scale, (255, 255, 0), 1, cv2.LINE_AA,
         )
 
 
@@ -107,6 +133,11 @@ def main(argv: list[str] | None = None) -> int:
     blurrer = (
         build_blurrer(args.blur_method, style=args.blur_style, model_path=args.face_model)
         if args.blur_faces
+        else None
+    )
+    live = (
+        LiveMetricsComputer(args.live_metrics, window_s=args.live_window_s)
+        if args.live_metrics != "off"
         else None
     )
     try:
@@ -142,6 +173,15 @@ def main(argv: list[str] | None = None) -> int:
                         draw_angles(frame, angles)
                 elif args.no_window:
                     print(f"frame {count}: no pose detected")
+
+                if live is not None:
+                    # Pushed for every frame, pose or not: a dropout is part of the
+                    # window's coverage, and skipping those frames would quietly
+                    # inflate it into a claim that tracking held throughout.
+                    metrics = live.push(timestamp_ms, result)
+                    if not args.no_window:
+                        # Top-right; draw_angles owns the top-left corner.
+                        draw_live_metrics(frame, metrics, origin=(frame.shape[1] - 250, 32))
 
                 if not args.no_window:
                     cv2.imshow(WINDOW_NAME, frame)

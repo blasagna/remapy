@@ -19,6 +19,7 @@ from pose_estimation.draw import (
     BONE_COLOR_DIM,
     JOINT_COLOR,
     draw_skeleton,
+    shade_box,
 )
 from recording.annotations import Annotation
 from tests.fakes import fake_recording
@@ -95,6 +96,29 @@ class DrawSkeletonTests(unittest.TestCase):
         frame = _frame()
         draw_skeleton(frame, pts, [(0, 1)])
         self.assertTrue((frame[60, 80] == BONE_COLOR).all())
+
+
+class ShadeBoxTests(unittest.TestCase):
+    """The translucent panel behind the overlay text (legibility over busy footage)."""
+
+    def test_blends_toward_dark_without_erasing(self):
+        frame = np.full((40, 40, 3), 200, np.uint8)
+        shade_box(frame, (5, 5), (35, 35), alpha=0.5)
+        inside = int(frame[20, 20, 0])
+        self.assertLess(inside, 200)  # darkened
+        self.assertGreater(inside, 0)  # translucent, not a solid fill
+        self.assertEqual(int(frame[0, 0, 0]), 200)  # outside the box untouched
+
+    def test_clamps_to_frame_and_never_raises(self):
+        frame = np.full((20, 20, 3), 128, np.uint8)
+        shade_box(frame, (-50, -50), (999, 999))  # fully off-bounds corners
+        self.assertTrue((frame < 128).all())  # whole frame shaded, no crash
+
+    def test_empty_or_inverted_box_is_a_noop(self):
+        frame = np.full((20, 20, 3), 128, np.uint8)
+        shade_box(frame, (10, 10), (10, 10))  # zero area
+        shade_box(frame, (15, 15), (5, 5))  # inverted
+        self.assertTrue((frame == 128).all())
 
 
 class ActiveLabelTests(unittest.TestCase):

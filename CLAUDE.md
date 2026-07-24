@@ -50,6 +50,8 @@ Body-pose skeleton + joint angles, using `video_capture` for frames.
   Takes a plain `(K, 2+)` **numpy** array (not MediaPipe objects) and **imports no mediapipe**,
   which is the point: a recording already stores its edge list in `meta/pose_connections`, so
   `annotate` can draw poses without pulling the whole MediaPipe stack in for a 35-pair constant.
+  Also owns `put_text` (black-outlined text, readable over arbitrary footage), shared by `annotate`
+  and `motor_metrics.live_draw` — both draw over whatever the camera happened to see.
   Adds the two behaviours the live path never needed — it **skips NaN** points/bones (the
   recorder writes full-NaN rows for untracked frames and `annotate` scrubs across them;
   `int(nan)` raises), and **dims** landmarks below `min_visibility`, since MediaPipe
@@ -297,10 +299,69 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   no depth, no IMU); `speed_norm_per_s` is in **image widths/s, never metres**. The deliverable is
   the *pattern*, which the pelvis-centered frame captures perfectly: cadence, `cycle_period_cv`,
   and `phase_offset` (**0.5 = reciprocal/mature, 0.0 = symmetric "bunny" haul**). Limb signal is
-  the wrist projected on the **trunk axis** — in prone there is no useful vertical.
+  the limb projected on the **trunk axis** — in prone there is no useful vertical.
   `MIN_CYCLE_EXCURSION_M` is **not optional**: the prominence gate alone is relative to the
   signal's own range, so it normalizes pure jitter up into a textbook crawl (measured: 57 cycles
   from noise, a still child reporting a confident fictional cadence).
+  **Both limb girdles are measured** — arms (wrists, the unprefixed fields, their long-standing
+  names) *and* legs (knees, the `leg_*` fields), computed by one `_girdle` helper called twice.
+  This is load-bearing for Remy: his arms often move together (symmetric, not alternating) while he
+  drives with the **legs and favors one repeatedly** — so `leg_amplitude_symmetry` ("favors one leg",
+  sign = side) and `leg_phase_offset` (alternating vs together) carry the signal the wrists miss.
+  Each girdle **gates independently** (`ARM_LANDMARKS`/`LEG_LANDMARKS`, own `coverage`/`tracked_s`):
+  legs leave frame in prone more than arms, and one occluded knee must not cost the arm cadence.
+  `_prepared`/`limb_signal` take a `marker` (`wrist`/`knee`); `quality.KNEES` mirrors `WRISTS`.
+- `live.py` / `live_draw.py` — the **live** path: the same `hold_metrics`/`crawl_metrics`, run over
+  a rolling window during capture instead of over an annotator's marks. `LiveWindow` is a ring
+  buffer that *is* a `Recording` as far as the metrics care (it exposes exactly the attributes
+  `tests.fakes.fake_recording` does), so **no metric math is reimplemented**; it pushes through
+  `recording.recorder.landmark_rows` — extracted from `HDF5Recorder.append` — so a live frame and a
+  recorded one convert identically, NaN convention included. Two measurements shape it. **Cost is
+  not the constraint** (~2.9 ms per recompute over a 5 s window, ~12.6 ms over 30 s, against a 33 ms
+  frame MediaPipe already dominates), so the window is recomputed whole every `RECOMPUTE_EVERY`
+  frames. **`LIVE_LAG = 3` is**: the Savitzky-Golay fit leaves the last 3 samples of *any* window
+  one-sided, and measured against the offline chain the edge-extrapolated velocity is ~100 % error
+  (RMSE 0.0757 m/s vs a 0.0695 m/s signal sd) while at lag 3 the live value is **bit-identical** to
+  the offline one. So instantaneous readouts are 100 ms old *on purpose*; aggregates (sway RMS,
+  cadence) span the window and dilute the 3 edge samples away, and are not trimmed — trimming only
+  moves the edge. A fixed-epoch resample anchor was tried and **rejected on measurement** (rolling
+  jitter 0.143 % → 0.124 % of value, with a *worse* max), so `derive.py` keeps its no-per-call-knobs
+  property. What is deliberately absent: **no movement detector**, hence no SPARC / submovements /
+  `movement_duration_s` — they need an onset the code is not entitled to invent, which is the same
+  refusal `hold.py` makes about loss-of-posture; no `duration_s` (the annotator's marks); no
+  *between-trial* `symmetry_index` (transition's, grouped by `side=`) — but the crawl **within-window**
+  left/right `live_leg_amplitude_symmetry` **is** live (the "favors one leg" readout, distinct from
+  the between-trial one); no `speed_norm_per_s` (framing-dependent) or `phase_offset`/`leg_phase_offset`
+  reciprocity (Hilbert's edge effects peak at a short trailing window's edges, so alternating-vs-together
+  stays offline for both girdles). **Crawl carries both girdles live** (`live_*` arm fields + `live_leg_*`
+  fields off the knees); the crawl overlay leads with the legs, since that is Remy's signal. `crawl` is
+  the **camera-robust** mode — it reads no `up` at all — while `hold` inherits `WORLD_UP`'s level-camera
+  assumption, so
+  its headline is `live_trunk_angle_delta_deg` (referenced to the window's own median) rather than
+  an absolute lean, and `up_source` is on screen. **The never-mix rule:** live values must never
+  reach the `.h5` or `metrics_table` — different window, no marked trial, a 3-sample-old readout —
+  and it is enforced *structurally*, since **every `LiveMetrics` field is `live_`-prefixed** and a
+  test pins both that and disjointness from the offline columns. Keep the prefix. Below
+  `MIN_COVERAGE` the readout **blanks rather than going stale** (a number left on screen during a
+  dropout reads as a measurement of the child); `live_draw` renders NaN as `--` and the Rerun logger
+  skips NaN so the plots stop advancing. `motor_metrics/segments.py` gained a public `Span`
+  (start/stop with no annotation) for this, replacing `crawl.py`'s private `_Span`.
+  **Loop order is load-bearing** in `rerun_viewer/main.py`: the recorder archives the clean blurred
+  frame *before* `draw_live_metrics` runs, because the overlay mutates in place and a HUD burned
+  into a recording would show numbers the offline metrics legitimately disagree with.
+  **Overlay text is plain cyan** (a single `cv2.putText`, matching `pose_estimation.main.draw_angles`)
+  — deliberately *not* the outlined `draw.put_text`, whose black under-copy reads as a drop shadow the
+  joint-angle overlay lacks; coverage stays green/red and `up:` orange, the two colors that carry
+  meaning. Legibility over busy footage instead comes from a **translucent dark panel** shaded behind
+  the whole readout via `draw.shade_box` (a clamped `cv2.addWeighted` blend) — the same panel
+  `draw_angles` now draws behind the top-left joint angles, sized to the measured text. `_shade_panel`
+  walks the same per-element `y` advances the draw code uses, so the box tracks the layout. **`sit_steadiness`/`_draw_meter`** add the first child-facing piece: a red→green fill bar
+  giving good-vs-bad sit-hold feedback on a continuum. Its honesty is in *what it reads* — the
+  trunk's deviation from its **own** window baseline (`live_trunk_angle_delta_deg`), so a tilted
+  camera shifts the baseline not the score, and never an absolute upright angle or a "good posture"
+  threshold (the loss-of-posture criterion `hold.py` refuses). `STEADINESS_TOL_DEG` is a display/game
+  tolerance, not a validated threshold — it lives in the render layer (`live.py` stays pure
+  buffer-and-dispatch and computes no metric of its own). Crawl gets no meter (it reads no vertical).
 - `report.py` / `main.py` — `metrics_table(rec)` → one row per trial, columns the **union** across
   exercises (so they concatenate into a trend); `session_table(paths)` for the cross-session view,
   which is the whole point given there is no external GMFM score to calibrate against. Label params
@@ -486,6 +547,8 @@ Tasks defined under `[tasks]` in `pixi.toml`:
 - `pixi run annotate <session.hdf5>` — scrub a recording and label time segments (edits saved in place).
 - `pixi run metrics <session.hdf5> [--csv out.csv] [--exercise sit_hold]` — motor metrics for the
   labeled trials in a recording (`--window-s N` to compare holds of unequal length fairly).
+- `pixi run live` / `pixi run live-crawl` — live metrics over a rolling window in the pose window
+  (`--live-metrics {hold,crawl}` on `pose` and `rerun`; `--live-window-s` to change the window).
 - `pixi run notebook` — Jupyter Lab in `notebooks/` (offline metric exploration).
 - `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
 
@@ -515,6 +578,16 @@ display, or GPU; ~480 tests run in a few seconds:
   shorter-than-window / fully-untracked segments — all must return NaN, never raise, since one
   mis-marked annotation must not take down a 40-row report. Integration tests drive the real
   `HDF5Recorder` → `AnnotationStore` → `Recording` → `metrics_table` path against temp files.
+- `tests/test_live.py` — the live path. Same discipline as the metrics tests: sway RMS against
+  `amplitude/sqrt(2)`, cadence against the driving frequency. Three pins carry it — the **`LIVE_LAG`
+  identity** (trailing-window value at `-4` equals the offline value to 12 places, *and* the edge
+  velocity's error rivals the signal's own sd, so nobody "simplifies" the lag to 0), the
+  **never-mix rule** (every field `live_`-prefixed and disjoint from the offline columns), and
+  **blanking after a dropout** (a stale sway figure must not survive into an untracked window).
+  Plus ring wraparound/ordering, `pose_present` being True for *extrapolated* low-visibility
+  landmarks while `landmarks_ok` is False (the trap, restated where it is most tempting to conflate
+  them), a still child reporting **no** cadence, and a per-push budget. `draw_live_metrics` is
+  pinned to mutate in place — that is why the capture loop archives before drawing.
 - `tests/test_annotate.py` — the `annotate` GUI's drawable logic (the loop itself, needing a
   window and keyboard, is not tested). `draw_skeleton` against real numpy/cv2: all-NaN rows
   no-op, partial NaN skips only the affected bones, `(0.5, 0.5)` lands on the frame center, and

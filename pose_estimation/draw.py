@@ -29,6 +29,43 @@ JOINT_COLOR_DIM = (0, 0, 90)
 # metrics will actually accept.
 MIN_VISIBILITY = 0.5
 
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def put_text(frame, text, org, scale, color, thickness: int = 1) -> None:
+    """Draw text with a black outline so it stays readable over arbitrary footage.
+
+    Both callers draw over whatever the camera happened to see — a recording being
+    scrubbed in ``annotate``, or a live frame under the metrics overlay — so plain
+    ``cv2.putText`` disappears against a bright wall or a light shirt. Lives here with
+    :func:`draw_skeleton` because this module is already the shared, mediapipe-free
+    OpenCV drawing surface.
+    """
+    cv2.putText(frame, text, org, FONT, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, text, org, FONT, scale, color, thickness, cv2.LINE_AA)
+
+
+def shade_box(frame, top_left, bottom_right, alpha: float = 0.45,
+              color: tuple[int, int, int] = (0, 0, 0)) -> None:
+    """Blend a translucent filled rectangle into ``frame`` in place, behind an overlay.
+
+    A dark panel under the metric/angle text lifts it off busy footage without hiding it,
+    which plain text (no outline) needs. ``alpha`` is the panel's opacity; the box is
+    clamped to the frame, so an overlay running off the edge shades what fits rather than
+    raising. Draw this *before* the text so the text lands on top.
+    """
+    h, w = frame.shape[:2]
+    x0 = max(0, min(int(top_left[0]), w))
+    y0 = max(0, min(int(top_left[1]), h))
+    x1 = max(0, min(int(bottom_right[0]), w))
+    y1 = max(0, min(int(bottom_right[1]), h))
+    if x1 <= x0 or y1 <= y0:
+        return
+    roi = frame[y0:y1, x0:x1]
+    tint = np.empty_like(roi)
+    tint[:] = color
+    cv2.addWeighted(tint, alpha, roi, 1.0 - alpha, 0.0, dst=roi)
+
 
 def draw_skeleton(
     frame,

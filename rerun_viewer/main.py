@@ -19,6 +19,8 @@ import time
 
 from adafruit_feather_sense import open_feather
 from face_blur.factory import BLUR_METHODS, build_blurrer
+from motor_metrics.live import MODE_WINDOW_S, MODES, LiveMetricsComputer
+from motor_metrics.live_draw import draw_live_metrics
 from pose_estimation.estimator import PoseEstimator
 from recording.recorder import HDF5Recorder
 from video_capture.capture import CaptureError, VideoCapture
@@ -93,6 +95,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--face-model", default=None, help="Path to a face detector .tflite.")
     parser.add_argument(
+        "--live-metrics",
+        choices=("off",) + MODES,
+        default="off",
+        help="Compute motor metrics live over a trailing window and show them on a "
+        "'Live metrics' tab plus a frame overlay. hold = sway + trunk lean; crawl = "
+        "cadence + cycle variability (needs no vertical reference, so it survives a "
+        "tilted camera). Default: off. Live values are NOT the offline table's values "
+        "-- see motor_metrics/live.py.",
+    )
+    parser.add_argument(
+        "--live-window-s",
+        type=float,
+        default=None,
+        help="Trailing window for --live-metrics, in seconds "
+        f"(defaults: {', '.join(f'{k}={v:g}' for k, v in MODE_WINDOW_S.items())}).",
+    )
+    parser.add_argument(
         "--record", default=None, help="Also write an HDF5 recording to this path (offline analysis)."
     )
     parser.add_argument(
@@ -154,6 +173,12 @@ def main(argv: list[str] | None = None) -> int:
             else "Feather Sense not detected; continuing without sensor data."
         )
     try:
+        live_mode = None if args.live_metrics == "off" else args.live_metrics
+        live = (
+            LiveMetricsComputer(live_mode, window_s=args.live_window_s)
+            if live_mode is not None
+            else None
+        )
         logger = PoseRerunLogger(
             spawn=not args.no_spawn,
             save_path=args.save,
@@ -161,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             jpeg_quality=args.jpeg_quality,
             layout=args.layout,
             feather=feather is not None,
+            live=live_mode,
         )
         with VideoCapture(source, width=args.width, height=args.height) as cap, \
                 PoseEstimator(model_path=args.model) as pose:
@@ -196,9 +222,23 @@ def main(argv: list[str] | None = None) -> int:
                 # Redact faces before logging so recordings never hold raw faces.
                 if blurrer is not None:
                     blurrer.blur(frame, result)
-                logger.log_frame(count, now - start, fps, frame, result)
+
+                # Order matters, and it is the reverse of what reads naturally. The
+                # recording is archived FIRST, from the clean blurred frame, and the
+                # live overlay is drawn only afterwards -- so the HUD is never burned
+                # into the .h5. A recording carrying a live readout would show numbers
+                # that the offline metrics, recomputed from the same file's landmarks,
+                # legitimately disagree with (different window, no marked trial), and
+                # there would be no way to tell afterwards which was which.
                 if recorder is not None:
                     recorder.append(frame, timestamp_ms, result)
+
+                metrics = live.push(timestamp_ms, result) if live is not None else None
+                if metrics is not None:
+                    draw_live_metrics(frame, metrics)
+                logger.log_frame(count, now - start, fps, frame, result)
+                if metrics is not None:
+                    logger.log_live_metrics(metrics)
 
                 # Drain any Feather Sense samples that arrived since the last frame.
                 if feather is not None:

@@ -61,6 +61,33 @@ def pose_result(poses_norm=None, poses_world=None):
     )
 
 
+#: A result with no pose, as MediaPipe emits when it finds nothing.
+NO_POSE = pose_result()
+
+
+def pose_result_from_row(world_row, norm_row=None, *, visibility=1.0):
+    """A pose result carrying one frame of a ``body_world``-style ``(33, 3)`` array.
+
+    The bridge between the array-shaped fakes (which describe *anatomy*) and the
+    result-shaped ones (which describe what the *model emits*). Live code consumes the
+    latter — ``motor_metrics.live.LiveWindow.push`` takes a result, not rows — so a
+    test that wants a synthetic body moving through a live buffer needs this to convert
+    between them. ``norm_row`` defaults to ``world_row``, which is fine for anything
+    reading only world coordinates.
+    """
+    world_row = np.asarray(world_row, dtype=np.float64)
+    norm_row = world_row if norm_row is None else np.asarray(norm_row, dtype=np.float64)
+    world = [
+        FakeLandmark(x=float(p[0]), y=float(p[1]), z=float(p[2]), visibility=visibility)
+        for p in world_row
+    ]
+    norm = [
+        FakeLandmark(x=float(p[0]), y=float(p[1]), z=float(p[2]), visibility=visibility)
+        for p in norm_row
+    ]
+    return pose_result([norm], [world])
+
+
 # --------------------------------------------------------------------------- #
 # Recording stand-in
 # --------------------------------------------------------------------------- #
@@ -70,6 +97,7 @@ NUM_LANDMARKS = 33
 _L_SHOULDER, _R_SHOULDER = 11, 12
 _L_WRIST, _R_WRIST = 15, 16
 _L_HIP, _R_HIP = 23, 24
+_L_KNEE, _R_KNEE = 25, 26
 
 
 def body_world(
@@ -80,6 +108,8 @@ def body_world(
     hip_width=0.18,
     left_wrist=None,
     right_wrist=None,
+    left_knee=None,
+    right_knee=None,
 ):
     """``(N, 33, 3)`` world landmarks for a synthetic body.
 
@@ -88,8 +118,8 @@ def body_world(
     ``(N, 3)`` pelvis -> mid-shoulder vector per frame; hips are placed symmetrically
     about ``hip_center`` (default the origin, mirroring MediaPipe's hip-centered world
     frame) and shoulders symmetrically about ``hip_center + trunk``, separated along
-    world x. ``left_wrist``/``right_wrist`` are absolute ``(N, 3)`` positions.
-    Unnamed landmarks stay at the origin.
+    world x. ``left_wrist``/``right_wrist``/``left_knee``/``right_knee`` are absolute
+    ``(N, 3)`` positions. Unnamed landmarks stay at the origin.
     """
     trunk = np.atleast_2d(np.asarray(trunk, dtype=np.float32))
     count = trunk.shape[0]
@@ -108,6 +138,10 @@ def body_world(
         out[:, _L_WRIST] = np.asarray(left_wrist, dtype=np.float32)
     if right_wrist is not None:
         out[:, _R_WRIST] = np.asarray(right_wrist, dtype=np.float32)
+    if left_knee is not None:
+        out[:, _L_KNEE] = np.asarray(left_knee, dtype=np.float32)
+    if right_knee is not None:
+        out[:, _R_KNEE] = np.asarray(right_knee, dtype=np.float32)
     return out
 
 
