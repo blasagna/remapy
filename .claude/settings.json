@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pixi add *)",
+      "Bash(pixi run *)",
+      "Bash(pixi remove *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
