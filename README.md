@@ -79,7 +79,7 @@ Not currently used:
       SPARC, submovement counts and any duration metric are therefore still offline-only: they need
       an onset/offset the code is not entitled to invent. Live values never enter the `.h5` or the
       offline table (different window, different measurement)
-- [ ] child-facing live display — the same readout driving something motivating rather than a
+- [x] child-facing live display — the same readout driving something motivating rather than a
       numeric overlay. Note "held for N seconds" is *not* available (that is the loss-of-posture
       inference `motor_metrics` refuses); "coverage green and trunk within X of its own baseline" is.
       **First piece landed:** `pixi run live` now draws a sit-hold *steadiness meter* — a
@@ -91,7 +91,7 @@ Not currently used:
       reads no vertical). It is the natural driver for a *use-both-legs* game — reward closing the
       gap toward even — the direct counter to Remy favoring one leg. Only the meter is drawn so far;
       wiring either signal to something motivating is the open work
-- [ ] refactor parts of CLAUDE.md into distributed rules, skills, hooks, commands, etc. All context is not needed for every prompt.
+- [x] refactor parts of CLAUDE.md into distributed rules, skills, hooks, commands, etc. All context is not needed for every prompt.
 - [ ] fuse the Feather Sense IMU into the metrics — blocked on camera↔IMU clock alignment: the
       recording stores the device clock (ms since board boot) but not its offset to the host
       timeline. Would give a true gravity vector (no level-camera assumption) and 100 Hz sway
