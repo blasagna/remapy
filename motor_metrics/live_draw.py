@@ -10,7 +10,9 @@ no ``cv2``, and out of :mod:`pose_estimation.draw` because that is the generic s
 drawer and this knows the metric vocabulary. Text is drawn plain (a single
 ``cv2.putText``, cyan), matching ``pose_estimation.main.draw_angles`` exactly rather than
 using the outlined :func:`~pose_estimation.draw.put_text` — the black outline reads as a
-drop shadow the joint-angle overlay does not have.
+drop shadow the joint-angle overlay does not have. Legibility over busy footage instead
+comes from a translucent dark panel shaded behind the whole readout
+(:func:`~pose_estimation.draw.shade_box`), the same panel ``draw_angles`` draws.
 
 **Blanking is the point of the layout.** A metric whose value is NaN renders as ``--``,
 never as a stale number: coverage below the gate means the tracker has lost the child,
@@ -33,7 +35,7 @@ Unicode; that path draws with real fonts.
 import cv2
 import numpy as np
 
-from pose_estimation.draw import FONT
+from pose_estimation.draw import FONT, shade_box
 
 from .live import MIN_COVERAGE
 
@@ -168,33 +170,64 @@ def draw_live_metrics(frame, metrics, origin: tuple[int, int] | None = None) -> 
     """
     if frame is None or metrics is None:
         return
-    x, y = origin if origin is not None else (_MARGIN, _MARGIN + _LINE_H)
+    x, y0 = origin if origin is not None else (_MARGIN, _MARGIN + _LINE_H)
 
     cov = metrics.live_coverage
     cov_color = _OK_COLOR if cov >= MIN_COVERAGE else _BAD_COLOR
     header = f"{metrics.live_mode}  {metrics.live_window_s:g}s window"
-    _text(frame, header, (x, y), _SCALE, _TEXT_COLOR)
-    y += _LINE_H
 
-    _text(frame, f"coverage  {_fmt(cov, 2)}", (x, y), _SCALE, cov_color)
-    y += _LINE_H
-    _text(frame, f"tracked   {_fmt(metrics.live_tracked_s, 1, ' s')}", (x, y), _SCALE,
-             _TEXT_COLOR)
-    y += _LINE_H
+    # Build every line first so the panel can be sized to the content and shaded under it.
+    # The text is plain (no outline), so a translucent dark panel is what keeps the cyan
+    # legible over busy footage.
+    lines = [
+        (header, _TEXT_COLOR),
+        (f"coverage  {_fmt(cov, 2)}", cov_color),
+        (f"tracked   {_fmt(metrics.live_tracked_s, 1, ' s')}", _TEXT_COLOR),
+    ]
+    lines += [(f"{label:<{_LABEL_W}s}{value}", _TEXT_COLOR) for label, value in _rows(metrics)]
 
-    for label, value in _rows(metrics):
-        _text(frame, f"{label:<{_LABEL_W}s}{value}", (x, y), _SCALE, _TEXT_COLOR)
+    q = sit_steadiness(metrics)
+    meter_label = None if q is None else f"steady {int(round(q * 100))}%"
+    up_line = None
+    if metrics.live_up_source not in ("n/a", ""):
+        up_line = f"up: {metrics.live_up_source}"
+
+    _shade_panel(frame, x, y0, lines, meter_label, up_line)
+
+    y = y0
+    for text, color in lines:
+        _text(frame, text, (x, y), _SCALE, color)
         y += _LINE_H
 
     # Sit-hold steadiness meter: the continuum feedback. None for crawl or a blanked
     # readout, so it simply does not draw then. See sit_steadiness on why this is honest.
-    q = sit_steadiness(metrics)
-    if q is not None:
-        _draw_meter(frame, f"steady {int(round(q * 100))}%", q, (x, y))
+    if meter_label is not None:
+        _draw_meter(frame, meter_label, q, (x, y))
         y += _LINE_H + _BAR_H
 
     # The vertical reference is an assumption, not a measurement, and "less controlled"
     # is exactly where a propped-up camera breaks it. Say which one is in force rather
     # than letting a tilted session look identical to a level one.
-    if metrics.live_up_source not in ("n/a", ""):
-        _text(frame, f"up: {metrics.live_up_source}", (x, y), 0.42, _WARN_COLOR)
+    if up_line is not None:
+        _text(frame, up_line, (x, y), 0.42, _WARN_COLOR)
+
+
+def _shade_panel(frame, x: int, y0: int, lines, meter_label, up_line) -> None:
+    """Dark translucent panel sized to the overlay content, drawn before the text.
+
+    Width is measured off the widest line (and the meter bar); height walks the same
+    per-element advances the draw code below uses, so the box tracks the layout instead of
+    guessing at it.
+    """
+    widths = [cv2.getTextSize(t, FONT, _SCALE, 1)[0][0] for t, _ in lines]
+    if meter_label is not None:
+        widths.append(max(_BAR_W, cv2.getTextSize(meter_label, FONT, _SCALE, 1)[0][0]))
+    if up_line is not None:
+        widths.append(cv2.getTextSize(up_line, FONT, 0.42, 1)[0][0])
+
+    bottom = y0 + _LINE_H * len(lines)
+    if meter_label is not None:
+        bottom += _LINE_H + _BAR_H
+    if up_line is not None:
+        bottom += _LINE_H
+    shade_box(frame, (x - 6, y0 - 16), (x + max(widths) + 6, bottom))

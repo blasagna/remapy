@@ -339,7 +339,10 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   **Overlay text is plain cyan** (a single `cv2.putText`, matching `pose_estimation.main.draw_angles`)
   — deliberately *not* the outlined `draw.put_text`, whose black under-copy reads as a drop shadow the
   joint-angle overlay lacks; coverage stays green/red and `up:` orange, the two colors that carry
-  meaning. **`sit_steadiness`/`_draw_meter`** add the first child-facing piece: a red→green fill bar
+  meaning. Legibility over busy footage instead comes from a **translucent dark panel** shaded behind
+  the whole readout via `draw.shade_box` (a clamped `cv2.addWeighted` blend) — the same panel
+  `draw_angles` now draws behind the top-left joint angles, sized to the measured text. `_shade_panel`
+  walks the same per-element `y` advances the draw code uses, so the box tracks the layout. **`sit_steadiness`/`_draw_meter`** add the first child-facing piece: a red→green fill bar
   giving good-vs-bad sit-hold feedback on a continuum. Its honesty is in *what it reads* — the
   trunk's deviation from its **own** window baseline (`live_trunk_angle_delta_deg`), so a tilted
   camera shifts the baseline not the score, and never an absolute upright angle or a "good posture"
