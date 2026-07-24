@@ -85,7 +85,12 @@ Not currently used:
       **First piece landed:** `pixi run live` now draws a sit-hold *steadiness meter* — a
       red→green fill bar reading good-vs-bad on a continuum, built on the trunk's deviation from its
       *own* rolling baseline (so a tilted camera shifts the baseline, not the score) rather than an
-      absolute upright angle. Still a numeric overlay around it; the game/animation layer is the rest
+      absolute upright angle. Still a numeric overlay around it; the game/animation layer is the rest.
+      **Second honest signal available:** live crawl now reports `live_leg_amplitude_symmetry` — a
+      continuous "favors one leg" reading (0 = even, sign = side) that survives a tilted camera (it
+      reads no vertical). It is the natural driver for a *use-both-legs* game — reward closing the
+      gap toward even — the direct counter to Remy favoring one leg. Only the meter is drawn so far;
+      wiring either signal to something motivating is the open work
 - [ ] refactor parts of CLAUDE.md into distributed rules, skills, hooks, commands, etc. All context is not needed for every prompt.
 - [ ] fuse the Feather Sense IMU into the metrics — blocked on camera↔IMU clock alignment: the
       recording stores the device clock (ms since board boot) but not its offset to the host
