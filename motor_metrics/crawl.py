@@ -17,19 +17,31 @@ matters, the answer is a second camera or a floor fiducial, not cleverer math on
 data.
 
 **What it can measure is the pattern, and that is the better metric anyway.** Limb motion
-*relative to the pelvis* is exactly what the hip-centered frame captures perfectly. So:
+*relative to the pelvis* is exactly what the hip-centered frame captures perfectly. So,
+for **each limb girdle** — arms (wrists) *and* legs (knees):
 
-- **Cadence** — how many pull cycles per minute, per side.
+- **Cadence** — how many pull/push cycles per minute, per side.
 - **Cycle variability** — how metronomic they are (``cycle_period_cv``). Consistency is a
   maturity axis in its own right.
-- **Reciprocity** (``phase_offset``) — whether the arms alternate (0.5, a mature crawl) or
-  pull together (0.0, a symmetric "bunny" haul). This is a genuine developmental axis and
+- **Reciprocity** (``phase_offset``) — whether the pair alternates (0.5, a mature crawl) or
+  moves together (0.0, a symmetric "bunny" haul). This is a genuine developmental axis and
   it costs nothing to measure here.
-- **Amplitude symmetry** — whether one arm does more of the work.
+- **Amplitude symmetry** — whether one limb does more of the work.
 
-Cadence and reciprocity are the deliverable. They are also the metrics likelier to move
-before the ordinal score does, which is this project's whole thesis — so leading with them
-over distance is the right call on the merits, not a consolation for a missing sensor.
+**Both girdles are measured because the developmental signal is not always in the arms.**
+Remy's arms often move symmetrically (together, not alternating) while he drives with the
+*legs*, and favors one leg over the other repeatedly rather than alternating them. Reading
+only the wrists would miss exactly the asymmetry that is changing. So ``crawl_metrics``
+reports the wrist metrics (unprefixed, their long-standing names) **and** a parallel set of
+``leg_*`` fields off the knees — ``leg_amplitude_symmetry`` is the "favors one leg" signal
+(sign gives the side), ``leg_phase_offset`` the alternating-vs-together one. Each girdle
+carries its own ``coverage``/``tracked_s`` (``leg_coverage``/``leg_tracked_s``), since legs
+leave frame in prone more than arms and the two should not gate each other out.
+
+Cadence, reciprocity and per-limb symmetry are the deliverable. They are also the metrics
+likelier to move before the ordinal score does, which is this project's whole thesis — so
+leading with them over distance is the right call on the merits, not a consolation for a
+missing sensor.
 """
 
 from dataclasses import dataclass
@@ -40,17 +52,22 @@ from scipy.signal import find_peaks, hilbert
 
 from .derive import FS, resample_uniform, smooth
 from .hold import path_length
-from .quality import TORSO, WRISTS, Gate, coverage, landmarks_ok, longest_run
+from .quality import KNEES, TORSO, WRISTS, Gate, coverage, landmarks_ok, longest_run
 from .segments import Span
 from .signals import com_norm, mid, trunk_vector
 from .transition import symmetry_index
 
 from mediapipe.tasks.python.vision import PoseLandmark as L  # isort: skip
 
-# A crawl needs the torso (for the body axis) and both wrists (for the limb signals), so
-# one gate and one good run serve every field -- the phase comparison needs both arms on
-# the same frames anyway.
-CRAWL_LANDMARKS = tuple(TORSO) + tuple(WRISTS)
+# A crawl is measured at both limb girdles: wrists (arms) AND knees (legs). Each needs
+# the torso for the body axis plus its own pair, and each is gated independently -- legs
+# drop out of frame in prone far more than arms do, and losing the arm cadence because a
+# knee was occluded would be the wrong trade. The phase comparison within a girdle needs
+# both of its limbs on the same frames, which one gate per girdle gives.
+ARM_LANDMARKS = tuple(TORSO) + tuple(WRISTS)
+LEG_LANDMARKS = tuple(TORSO) + tuple(KNEES)
+# Retained name for the arm gate (was the only girdle measured before legs were added).
+CRAWL_LANDMARKS = ARM_LANDMARKS
 
 # A peak counts as a pull cycle if it stands this far above the surrounding trough, as a
 # fraction of the signal's full range.
@@ -76,13 +93,19 @@ class CrawlMetrics:
     Every field here is limb-relative-to-pelvis and so fully available — except
     ``speed_norm_per_s``, which is in **image fractions per second, not metres**. See the
     module docstring before comparing it across sessions.
+
+    **Unprefixed fields are the arms** (wrists — their long-standing meaning); the
+    ``leg_*`` fields are the same measurements off the knees. Reciprocity and amplitude
+    symmetry read per girdle, so an arms-together / legs-favoring-one-side pattern shows as
+    a low ``phase_offset`` next to a nonzero ``leg_amplitude_symmetry``.
     """
 
     duration_s: float
-    tracked_s: float
-    coverage: float
+    tracked_s: float  # arms (torso + wrists); the trial's headline quality figure
+    coverage: float  # arms
     n_frames: int
 
+    # Arms (wrists).
     cadence_cpm: float  # pooled across sides
     cadence_cpm_left: float
     cadence_cpm_right: float
@@ -97,6 +120,24 @@ class CrawlMetrics:
     amplitude_symmetry: float  # 0 = both arms working equally; sign gives the side
 
     speed_norm_per_s: float  # IMAGE WIDTHS per second. Not metres. Within-session only.
+
+    # Legs (knees). Own coverage/tracked figures — legs leave frame in prone more than
+    # arms, so a leg dropout must not read as an arm one, or vice versa.
+    leg_coverage: float
+    leg_tracked_s: float
+
+    leg_cadence_cpm: float
+    leg_cadence_cpm_left: float
+    leg_cadence_cpm_right: float
+    leg_n_cycles_left: int
+    leg_n_cycles_right: int
+
+    leg_cycle_period_sd_s: float
+    leg_cycle_period_cv: float
+
+    leg_phase_offset: float  # 0.5 = legs alternate (mature), 0.0 = together
+    leg_phase_offset_circular_sd: float
+    leg_amplitude_symmetry: float  # "favors one leg": 0 = even, sign gives the side
 
 
 def limb_signal(rec, seg, side: str, marker: str = "wrist") -> np.ndarray:
@@ -195,32 +236,91 @@ def phase_offset(left, right, fs: float = FS) -> tuple[float, float]:
     return offset, circular_sd
 
 
-def crawl_metrics(rec, seg, *, gate: Gate = Gate()) -> CrawlMetrics:
-    """Metrics for one ``crawl`` segment.
+@dataclass(frozen=True)
+class _GirdleCrawl:
+    """One limb girdle's cadence/reciprocity/symmetry, plus its own quality figures.
 
-    Computed over the longest run where the torso and **both** wrists are trusted — the
-    reciprocity comparison needs both arms on the same frames. Returns NaN fields rather
-    than raising for trials that are empty, untracked, or too short.
+    An internal shape only — :func:`crawl_metrics` flattens two of these (arms, legs) into
+    the public :class:`CrawlMetrics`. ``run`` is the girdle's longest trusted span, kept so
+    the pelvis-speed figure can be computed over the arm girdle's run.
+    """
+
+    coverage: float
+    tracked_s: float
+    run: Span
+    cadence_cpm: float
+    cadence_cpm_left: float
+    cadence_cpm_right: float
+    n_cycles_left: int
+    n_cycles_right: int
+    cycle_period_sd_s: float
+    cycle_period_cv: float
+    phase_offset: float
+    phase_offset_circular_sd: float
+    amplitude_symmetry: float
+
+
+def crawl_metrics(rec, seg, *, gate: Gate = Gate()) -> CrawlMetrics:
+    """Metrics for one ``crawl`` segment, for **both** limb girdles (arms and legs).
+
+    Each girdle is computed over the longest run where the torso and *both* of its limbs
+    are trusted — the reciprocity comparison needs both on the same frames — and gated
+    independently, so an occluded leg does not cost the arm cadence. Returns NaN fields
+    rather than raising for trials that are empty, untracked, or too short.
     """
     ts = np.asarray(rec.timestamps_ms)
+    arm = _girdle(rec, seg, ts, landmarks=ARM_LANDMARKS, marker="wrist", gate=gate)
+    leg = _girdle(rec, seg, ts, landmarks=LEG_LANDMARKS, marker="knee", gate=gate)
 
-    ok = landmarks_ok(rec, CRAWL_LANDMARKS, gate)
+    return CrawlMetrics(
+        duration_s=_span_seconds(ts, seg.start, seg.stop),
+        tracked_s=arm.tracked_s,
+        coverage=arm.coverage,
+        n_frames=seg.stop - seg.start,
+        cadence_cpm=arm.cadence_cpm,
+        cadence_cpm_left=arm.cadence_cpm_left,
+        cadence_cpm_right=arm.cadence_cpm_right,
+        n_cycles_left=arm.n_cycles_left,
+        n_cycles_right=arm.n_cycles_right,
+        cycle_period_sd_s=arm.cycle_period_sd_s,
+        cycle_period_cv=arm.cycle_period_cv,
+        phase_offset=arm.phase_offset,
+        phase_offset_circular_sd=arm.phase_offset_circular_sd,
+        amplitude_symmetry=arm.amplitude_symmetry,
+        speed_norm_per_s=_speed_norm(rec, arm.run.start, arm.run.stop, arm.tracked_s),
+        leg_coverage=leg.coverage,
+        leg_tracked_s=leg.tracked_s,
+        leg_cadence_cpm=leg.cadence_cpm,
+        leg_cadence_cpm_left=leg.cadence_cpm_left,
+        leg_cadence_cpm_right=leg.cadence_cpm_right,
+        leg_n_cycles_left=leg.n_cycles_left,
+        leg_n_cycles_right=leg.n_cycles_right,
+        leg_cycle_period_sd_s=leg.cycle_period_sd_s,
+        leg_cycle_period_cv=leg.cycle_period_cv,
+        leg_phase_offset=leg.phase_offset,
+        leg_phase_offset_circular_sd=leg.phase_offset_circular_sd,
+        leg_amplitude_symmetry=leg.amplitude_symmetry,
+    )
+
+
+def _girdle(rec, seg, ts, *, landmarks, marker: str, gate: Gate) -> _GirdleCrawl:
+    """Cadence/reciprocity/symmetry for one limb pair (``marker`` = wrist or knee)."""
+    ok = landmarks_ok(rec, landmarks, gate)
     cov = coverage(ok, seg.start, seg.stop)
     r0, r1 = longest_run(ok, seg.start, seg.stop)
     tracked_s = _span_seconds(ts, r0, r1)
 
     run = Span(r0, r1)
-    left = _prepared(rec, run, "left", ts)
-    right = _prepared(rec, run, "right", ts)
+    left = _prepared(rec, run, "left", ts, marker)
+    right = _prepared(rec, run, "right", ts, marker)
 
     peaks_l, peaks_r = cycles(left), cycles(right)
     offset, circ_sd = phase_offset(left, right)
 
-    return CrawlMetrics(
-        duration_s=_span_seconds(ts, seg.start, seg.stop),
-        tracked_s=tracked_s,
+    return _GirdleCrawl(
         coverage=cov,
-        n_frames=seg.stop - seg.start,
+        tracked_s=tracked_s,
+        run=run,
         cadence_cpm=_cadence(peaks_l.size + peaks_r.size, 2 * tracked_s),
         cadence_cpm_left=_cadence(peaks_l.size, tracked_s),
         cadence_cpm_right=_cadence(peaks_r.size, tracked_s),
@@ -230,13 +330,12 @@ def crawl_metrics(rec, seg, *, gate: Gate = Gate()) -> CrawlMetrics:
         phase_offset=offset,
         phase_offset_circular_sd=circ_sd,
         amplitude_symmetry=_amplitude_symmetry(left, right),
-        speed_norm_per_s=_speed_norm(rec, r0, r1, tracked_s),
     )
 
 
-def _prepared(rec, span, side: str, ts: np.ndarray) -> np.ndarray:
+def _prepared(rec, span, side: str, ts: np.ndarray, marker: str = "wrist") -> np.ndarray:
     """A limb signal on the uniform grid and through the pinned smoothing chain."""
-    raw = limb_signal(rec, span, side)
+    raw = limb_signal(rec, span, side, marker)
     if raw.size < 2 or not np.isfinite(raw).all():
         return np.empty(0)
     _, uniform = resample_uniform(ts[span.start : span.stop], raw)

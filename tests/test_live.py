@@ -59,18 +59,24 @@ def _sitting_world(n, *, amp_ml=0.03, amp_ap=0.02, f_ml=0.5, f_ap=0.3, trunk_len
     return body_world(trunk)
 
 
-def _crawling_world(n, *, cadence_hz=1.0, excursion=0.08):
-    """A prone body whose wrists oscillate *along* the trunk axis, in anti-phase.
+def _crawling_world(n, *, cadence_hz=1.0, excursion=0.08,
+                    leg_excursion_l=0.0, leg_excursion_r=0.0, leg_phase_frac=0.5):
+    """A prone body whose wrists (and optionally knees) oscillate *along* the trunk axis.
 
-    The axis matters: ``limb_signal`` projects the wrist onto the trunk vector, so wrists
-    swinging perpendicular to it produce no cycles however far they travel.
+    The axis matters: ``limb_signal`` projects the limb onto the trunk vector, so limbs
+    swinging perpendicular to it produce no cycles however far they travel. Legs are still
+    by default; drive them with ``leg_excursion_*`` to exercise the leg girdle.
     """
     t = np.arange(n) / FS
     trunk = np.stack([0 * t, -0.30 + 0 * t, 0 * t], axis=1)
     phase = 2 * np.pi * cadence_hz * t
     left = np.stack([-0.2 + 0 * t, -0.10 + excursion * np.sin(phase), 0 * t], axis=1)
     right = np.stack([0.2 + 0 * t, -0.10 + excursion * np.sin(phase + np.pi), 0 * t], axis=1)
-    return body_world(trunk, left_wrist=left, right_wrist=right)
+    leg_phase = phase + 2 * np.pi * leg_phase_frac
+    left_knee = np.stack([-0.1 + 0 * t, 0.15 + leg_excursion_l * np.sin(phase), 0 * t], axis=1)
+    right_knee = np.stack([0.1 + 0 * t, 0.15 + leg_excursion_r * np.sin(leg_phase), 0 * t], axis=1)
+    return body_world(trunk, left_wrist=left, right_wrist=right,
+                      left_knee=left_knee, right_knee=right_knee)
 
 
 def _run(computer, world, *, visibility=1.0, fps=FS, start_ms=0):
@@ -290,6 +296,25 @@ class LiveMetricsComputerTests(unittest.TestCase):
         """Crawl reads no `up`, which is what makes it survive a tilted camera."""
         m = _run(LiveMetricsComputer("crawl"), _crawling_world(300))
         self.assertEqual(m.live_up_source, "n/a")
+
+    def test_live_crawl_reports_leg_cadence(self):
+        c = LiveMetricsComputer("crawl")
+        m = _run(c, _crawling_world(400, cadence_hz=1.0,
+                                    leg_excursion_l=0.08, leg_excursion_r=0.08))
+        self.assertAlmostEqual(m.live_leg_cadence_cpm, 60.0, delta=10.0)
+
+    def test_live_crawl_flags_a_favored_leg(self):
+        """Remy's signal: the left leg drives, the right barely moves. Must show live."""
+        c = LiveMetricsComputer("crawl")
+        m = _run(c, _crawling_world(400, cadence_hz=1.0,
+                                    leg_excursion_l=0.08, leg_excursion_r=0.005))
+        self.assertGreater(m.live_leg_amplitude_symmetry, 1.0)  # left favored
+        self.assertGreater(m.live_leg_n_cycles_left, 0)
+        self.assertEqual(m.live_leg_n_cycles_right, 0)
+
+    def test_live_crawl_has_no_leg_reciprocity_field(self):
+        """Leg phase offset stays offline (Hilbert edges), like the arm one."""
+        self.assertNotIn("live_leg_phase_offset", live_field_names())
 
     def test_still_child_does_not_report_a_fictional_cadence(self):
         """MIN_CYCLE_EXCURSION_M, live. Jitter must not normalize up into a crawl."""

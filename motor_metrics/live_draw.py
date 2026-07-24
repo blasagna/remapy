@@ -135,21 +135,40 @@ def _fmt(value, digits: int = 3, suffix: str = "") -> str:
     return f"{float(value):.{digits}f}{suffix}"
 
 
+def _favor(sym) -> str:
+    """Amplitude symmetry as magnitude + favored side (``0.85 L``), or ``even`` near zero.
+
+    A bare signed number does not read as "which leg"; this spells it out. ``--`` for NaN,
+    the same blanking convention :func:`_fmt` follows.
+    """
+    if sym is None or (isinstance(sym, float) and sym != sym):
+        return "--"
+    if abs(float(sym)) < 0.05:
+        return "even"
+    return f"{abs(float(sym)):.2f} {'L' if sym > 0 else 'R'}"
+
+
 def _rows(metrics) -> list[tuple[str, str]]:
     """The ``(label, value)`` lines for this readout's mode."""
     if metrics.live_mode == "crawl":
+        # Legs lead: Remy's signal is which leg he drives with, not the arms. `leg favor`
+        # is the headline (`0.85 L` = the left leg travels 85 % more), and the per-side
+        # cadence shows the same favoring in the cycle counts.
         return [
-            ("cadence", _fmt(metrics.live_cadence_cpm, 1, " cpm")),
+            ("arm cad", _fmt(metrics.live_cadence_cpm, 1, " cpm")),
+            ("leg cad", _fmt(metrics.live_leg_cadence_cpm, 1, " cpm")),
             (
                 "  L / R",
-                f"{_fmt(metrics.live_cadence_cpm_left, 1)} / "
-                f"{_fmt(metrics.live_cadence_cpm_right, 1)}",
+                f"{_fmt(metrics.live_leg_cadence_cpm_left, 1)} / "
+                f"{_fmt(metrics.live_leg_cadence_cpm_right, 1)}",
             ),
+            ("leg favor", _favor(metrics.live_leg_amplitude_symmetry)),
             (
-                "cycles L/R",
-                f"{_fmt(metrics.live_n_cycles_left)} / {_fmt(metrics.live_n_cycles_right)}",
+                "leg cyc",
+                f"{_fmt(metrics.live_leg_n_cycles_left)} / "
+                f"{_fmt(metrics.live_leg_n_cycles_right)}",
             ),
-            ("period CV", _fmt(metrics.live_cycle_period_cv, 3)),
+            ("period CV", _fmt(metrics.live_leg_cycle_period_cv, 3)),
         ]
     return [
         ("sway RMS", _fmt(metrics.live_sway_rms_m, 4, " m")),

@@ -1430,13 +1430,15 @@ class TransitionMetricsTests(unittest.TestCase):
 
 
 def _crawl_rec(n=300, freq=1.0, phase_frac=0.5, fps=30.0, amp_l=0.10, amp_r=0.10,
-               travel=0.0):
-    """A belly-crawling body: wrists oscillating along the body axis.
+               travel=0.0, amp_leg_l=0.0, amp_leg_r=0.0, leg_phase_frac=0.5):
+    """A belly-crawling body: wrists and knees oscillating along the body axis.
 
     The trunk points along -x (prone, head-first), so the body's long axis is x and each
-    wrist's reach is an oscillation along it. `phase_frac` is the left-right phase
-    offset in cycles: 0.5 alternating, 0.0 together. `travel` moves the pelvis across
-    the image (in normalized units) to exercise the image-space speed.
+    limb's reach is an oscillation along it. `phase_frac`/`leg_phase_frac` are the
+    left-right phase offsets in cycles for the arms/legs: 0.5 alternating, 0.0 together.
+    Legs are still by default (`amp_leg_*=0`), so a rec is arm-only unless a test drives
+    them. `travel` moves the pelvis across the image (in normalized units) to exercise the
+    image-space speed.
     """
     t = np.arange(n) / fps
     trunk = np.tile([-0.4, 0.0, 0.0], (n, 1))  # prone: body axis along -x
@@ -1445,10 +1447,17 @@ def _crawl_rec(n=300, freq=1.0, phase_frac=0.5, fps=30.0, amp_l=0.10, amp_r=0.10
         reach = -0.25 - amp * np.sin(2 * np.pi * freq * t + phase)
         return np.stack([reach, np.zeros(n), np.zeros(n)], axis=1)
 
+    def knee(amp, phase):
+        # Knees sit toward the feet (+x) and push along the same body axis.
+        reach = 0.25 + amp * np.sin(2 * np.pi * freq * t + phase)
+        return np.stack([reach, np.zeros(n), np.zeros(n)], axis=1)
+
     world = body_world(
         trunk,
         left_wrist=wrist(amp_l, 0.0),
         right_wrist=wrist(amp_r, 2 * np.pi * phase_frac),
+        left_knee=knee(amp_leg_l, 0.0),
+        right_knee=knee(amp_leg_r, 2 * np.pi * leg_phase_frac),
     )
     norm = np.zeros((n, 33, 3), dtype=np.float32)
     x = 0.2 + travel * (t / t[-1] if t[-1] > 0 else 0)
@@ -1693,6 +1702,63 @@ class CrawlMetricsTests(unittest.TestCase):
         m = crawl_metrics(rec, _crawl_seg(0, 300))
         self.assertEqual(m.n_cycles_left, 0)
         self.assertTrue(np.isnan(m.cadence_cpm))
+
+    # -- legs (knees): the driving girdle when the arms are quiet ----------------- #
+    def test_leg_cadence_matches_the_constructed_frequency(self):
+        m = crawl_metrics(
+            _crawl_rec(n=600, freq=1.0, amp_leg_l=0.10, amp_leg_r=0.10), _crawl_seg(0, 600)
+        )
+        self.assertAlmostEqual(m.leg_cadence_cpm, 60.0, delta=4)
+
+    def test_favoring_one_leg_shows_as_symmetry_and_lopsided_cycles(self):
+        # Remy's pattern at the limb level: drives with the left leg, right barely moves.
+        m = crawl_metrics(
+            _crawl_rec(n=600, freq=1.0, amp_leg_l=0.10, amp_leg_r=0.005),
+            _crawl_seg(0, 600),
+        )
+        self.assertGreater(m.leg_amplitude_symmetry, 1.0)  # strongly left-favored
+        self.assertGreater(m.leg_n_cycles_left, 10)
+        self.assertEqual(m.leg_n_cycles_right, 0)  # below the excursion floor: not a cycle
+
+    def test_alternating_legs_are_reciprocal_together_legs_symmetric(self):
+        alt = crawl_metrics(
+            _crawl_rec(n=600, amp_leg_l=0.10, amp_leg_r=0.10, leg_phase_frac=0.5),
+            _crawl_seg(0, 600),
+        )
+        together = crawl_metrics(
+            _crawl_rec(n=600, amp_leg_l=0.10, amp_leg_r=0.10, leg_phase_frac=0.0),
+            _crawl_seg(0, 600),
+        )
+        self.assertAlmostEqual(alt.leg_phase_offset, 0.5, places=1)
+        self.assertAlmostEqual(together.leg_phase_offset, 0.0, places=1)
+
+    def test_remy_pattern_arms_together_while_legs_favor_one_side(self):
+        # The exact clinical picture: arms move symmetrically together (not alternating),
+        # legs favor the left. Reading only the arms would miss the whole signal.
+        m = crawl_metrics(
+            _crawl_rec(n=600, phase_frac=0.0, amp_l=0.08, amp_r=0.08,
+                       amp_leg_l=0.10, amp_leg_r=0.03),
+            _crawl_seg(0, 600),
+        )
+        self.assertAlmostEqual(m.phase_offset, 0.0, places=1)  # arms together
+        self.assertGreater(m.leg_amplitude_symmetry, 0.5)  # legs favor one side
+
+    def test_legs_gate_independently_of_arms(self):
+        # A lost knee must not cost the arm metrics -- the reason each girdle carries its
+        # own coverage.
+        vis = np.ones((300, 33), dtype=np.float32)
+        vis[150:300, 25] = 0.0  # left knee lost for the back half
+        rec = _crawl_rec(n=300, amp_leg_l=0.10, amp_leg_r=0.10)
+        rec.visibility = vis
+        m = crawl_metrics(rec, _crawl_seg(0, 300))
+        self.assertAlmostEqual(m.coverage, 1.0, places=6)  # arms untouched
+        self.assertAlmostEqual(m.leg_coverage, 0.5, places=6)  # legs halved
+
+    def test_still_legs_are_nan_not_a_fictional_cadence(self):
+        m = crawl_metrics(_crawl_rec(n=300, amp_leg_l=0.0, amp_leg_r=0.0), _crawl_seg(0, 300))
+        self.assertEqual(m.leg_n_cycles_left, 0)
+        self.assertEqual(m.leg_n_cycles_right, 0)
+        self.assertTrue(np.isnan(m.leg_cadence_cpm))  # no movement, no cadence invented
 
 
 class MetricsTableTests(unittest.TestCase):

@@ -97,6 +97,7 @@ NUM_LANDMARKS = 33
 _L_SHOULDER, _R_SHOULDER = 11, 12
 _L_WRIST, _R_WRIST = 15, 16
 _L_HIP, _R_HIP = 23, 24
+_L_KNEE, _R_KNEE = 25, 26
 
 
 def body_world(
@@ -107,6 +108,8 @@ def body_world(
     hip_width=0.18,
     left_wrist=None,
     right_wrist=None,
+    left_knee=None,
+    right_knee=None,
 ):
     """``(N, 33, 3)`` world landmarks for a synthetic body.
 
@@ -115,8 +118,8 @@ def body_world(
     ``(N, 3)`` pelvis -> mid-shoulder vector per frame; hips are placed symmetrically
     about ``hip_center`` (default the origin, mirroring MediaPipe's hip-centered world
     frame) and shoulders symmetrically about ``hip_center + trunk``, separated along
-    world x. ``left_wrist``/``right_wrist`` are absolute ``(N, 3)`` positions.
-    Unnamed landmarks stay at the origin.
+    world x. ``left_wrist``/``right_wrist``/``left_knee``/``right_knee`` are absolute
+    ``(N, 3)`` positions. Unnamed landmarks stay at the origin.
     """
     trunk = np.atleast_2d(np.asarray(trunk, dtype=np.float32))
     count = trunk.shape[0]
@@ -135,6 +138,10 @@ def body_world(
         out[:, _L_WRIST] = np.asarray(left_wrist, dtype=np.float32)
     if right_wrist is not None:
         out[:, _R_WRIST] = np.asarray(right_wrist, dtype=np.float32)
+    if left_knee is not None:
+        out[:, _L_KNEE] = np.asarray(left_knee, dtype=np.float32)
+    if right_knee is not None:
+        out[:, _R_KNEE] = np.asarray(right_knee, dtype=np.float32)
     return out
 
 

@@ -55,7 +55,12 @@ passes nothing.
   ``count_submovements`` and ``movement_duration_s`` are absent. They need a movement's
   onset and offset, and nothing here is entitled to decide where those are.
 - **No ``duration_s``.** It is the annotator's marks by definition.
-- **No ``symmetry_index``.** It is a between-trial comparison by construction.
+- **No ``symmetry_index``.** The *between-trial* one (transition's, grouped by ``side=``)
+  is a cross-trial comparison by construction. The crawl *within-trial* left/right
+  amplitude symmetry is a different measure and **is** live (``live_leg_amplitude_symmetry``
+  — the "favors one leg" readout); do not conflate the two.
+- **No crawl ``phase_offset`` (reciprocity), either girdle.** Hilbert's edge effects peak at
+  a short trailing window's edges, so alternating-vs-together stays an offline number.
 
 **Live values must never reach the offline table or the ``.h5``.** Different window, no
 human-marked boundaries, and an instantaneous readout that is three samples old: the same
@@ -275,13 +280,28 @@ class LiveMetrics:
     # Crawl. Reads no vertical at all (the axis is the body's own trunk vector), which
     # makes it the most camera-robust thing here. `speed_norm_per_s` is excluded: it is
     # image-widths per second and only comparable at fixed framing. `phase_offset` too —
-    # Hilbert's edge effects are worst at exactly a short trailing window's edges.
-    live_cadence_cpm: float
+    # Hilbert's edge effects are worst at exactly a short trailing window's edges, so
+    # reciprocity stays offline for both girdles.
+    live_cadence_cpm: float  # arms (wrists)
     live_cadence_cpm_left: float
     live_cadence_cpm_right: float
     live_n_cycles_left: int
     live_n_cycles_right: int
     live_cycle_period_cv: float
+
+    # Legs (knees). The developmental signal for Remy is here, not in the arms: he drives
+    # with the legs and favors one repeatedly. `live_leg_amplitude_symmetry` is the
+    # "favors one leg" readout (0 = even, sign gives the side); it is a *within-window*
+    # left/right comparison, not the between-trial `symmetry_index` that stays offline.
+    # Per-side cadence shows the same favoring in the cycle counts. Leg reciprocity is
+    # excluded live for the same Hilbert reason as the arms.
+    live_leg_cadence_cpm: float
+    live_leg_cadence_cpm_left: float
+    live_leg_cadence_cpm_right: float
+    live_leg_n_cycles_left: int
+    live_leg_n_cycles_right: int
+    live_leg_cycle_period_cv: float
+    live_leg_amplitude_symmetry: float
 
 
 def _blank(mode: str, window_s: float, n_frames: int, cov: float, tracked_s: float,
@@ -308,6 +328,13 @@ def _blank(mode: str, window_s: float, n_frames: int, cov: float, tracked_s: flo
         live_n_cycles_left=0,
         live_n_cycles_right=0,
         live_cycle_period_cv=float("nan"),
+        live_leg_cadence_cpm=float("nan"),
+        live_leg_cadence_cpm_left=float("nan"),
+        live_leg_cadence_cpm_right=float("nan"),
+        live_leg_n_cycles_left=0,
+        live_leg_n_cycles_right=0,
+        live_leg_cycle_period_cv=float("nan"),
+        live_leg_amplitude_symmetry=float("nan"),
     )
 
 
@@ -433,6 +460,13 @@ class LiveMetricsComputer:
                     live_n_cycles_left=m.n_cycles_left,
                     live_n_cycles_right=m.n_cycles_right,
                     live_cycle_period_cv=m.cycle_period_cv,
+                    live_leg_cadence_cpm=m.leg_cadence_cpm,
+                    live_leg_cadence_cpm_left=m.leg_cadence_cpm_left,
+                    live_leg_cadence_cpm_right=m.leg_cadence_cpm_right,
+                    live_leg_n_cycles_left=m.leg_n_cycles_left,
+                    live_leg_n_cycles_right=m.leg_n_cycles_right,
+                    live_leg_cycle_period_cv=m.leg_cycle_period_cv,
+                    live_leg_amplitude_symmetry=m.leg_amplitude_symmetry,
                 )
         except (ValueError, IndexError, FloatingPointError):
             # The offline metrics are written not to raise on degenerate input, and the

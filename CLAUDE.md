@@ -299,10 +299,18 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   no depth, no IMU); `speed_norm_per_s` is in **image widths/s, never metres**. The deliverable is
   the *pattern*, which the pelvis-centered frame captures perfectly: cadence, `cycle_period_cv`,
   and `phase_offset` (**0.5 = reciprocal/mature, 0.0 = symmetric "bunny" haul**). Limb signal is
-  the wrist projected on the **trunk axis** — in prone there is no useful vertical.
+  the limb projected on the **trunk axis** — in prone there is no useful vertical.
   `MIN_CYCLE_EXCURSION_M` is **not optional**: the prominence gate alone is relative to the
   signal's own range, so it normalizes pure jitter up into a textbook crawl (measured: 57 cycles
   from noise, a still child reporting a confident fictional cadence).
+  **Both limb girdles are measured** — arms (wrists, the unprefixed fields, their long-standing
+  names) *and* legs (knees, the `leg_*` fields), computed by one `_girdle` helper called twice.
+  This is load-bearing for Remy: his arms often move together (symmetric, not alternating) while he
+  drives with the **legs and favors one repeatedly** — so `leg_amplitude_symmetry` ("favors one leg",
+  sign = side) and `leg_phase_offset` (alternating vs together) carry the signal the wrists miss.
+  Each girdle **gates independently** (`ARM_LANDMARKS`/`LEG_LANDMARKS`, own `coverage`/`tracked_s`):
+  legs leave frame in prone more than arms, and one occluded knee must not cost the arm cadence.
+  `_prepared`/`limb_signal` take a `marker` (`wrist`/`knee`); `quality.KNEES` mirrors `WRISTS`.
 - `live.py` / `live_draw.py` — the **live** path: the same `hold_metrics`/`crawl_metrics`, run over
   a rolling window during capture instead of over an annotator's marks. `LiveWindow` is a ring
   buffer that *is* a `Recording` as far as the metrics care (it exposes exactly the attributes
@@ -321,9 +329,14 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   property. What is deliberately absent: **no movement detector**, hence no SPARC / submovements /
   `movement_duration_s` — they need an onset the code is not entitled to invent, which is the same
   refusal `hold.py` makes about loss-of-posture; no `duration_s` (the annotator's marks); no
-  `symmetry_index` (between-trial); no `speed_norm_per_s` (framing-dependent) or `phase_offset`
-  (Hilbert's edge effects peak at a short trailing window's edges). `crawl` is the **camera-robust**
-  mode — it reads no `up` at all — while `hold` inherits `WORLD_UP`'s level-camera assumption, so
+  *between-trial* `symmetry_index` (transition's, grouped by `side=`) — but the crawl **within-window**
+  left/right `live_leg_amplitude_symmetry` **is** live (the "favors one leg" readout, distinct from
+  the between-trial one); no `speed_norm_per_s` (framing-dependent) or `phase_offset`/`leg_phase_offset`
+  reciprocity (Hilbert's edge effects peak at a short trailing window's edges, so alternating-vs-together
+  stays offline for both girdles). **Crawl carries both girdles live** (`live_*` arm fields + `live_leg_*`
+  fields off the knees); the crawl overlay leads with the legs, since that is Remy's signal. `crawl` is
+  the **camera-robust** mode — it reads no `up` at all — while `hold` inherits `WORLD_UP`'s level-camera
+  assumption, so
   its headline is `live_trunk_angle_delta_deg` (referenced to the window's own median) rather than
   an absolute lean, and `up_source` is on screen. **The never-mix rule:** live values must never
   reach the `.h5` or `metrics_table` — different window, no marked trial, a 3-sample-old readout —

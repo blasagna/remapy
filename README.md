@@ -68,7 +68,9 @@ Not currently used:
       then `pixi run metrics` / `notebooks/motor_metrics.ipynb`
 - [x] compute metrics in real time (GUI overlay) as well as offline — **the tilt-robust,
       trigger-free subset**: `pixi run live` (sway + trunk lean) / `pixi run live-crawl` (cadence +
-      cycle variability), or `--live-metrics` on `pose` and `rerun`. `motor_metrics/live.py` feeds a
+      cycle variability, for **both arms and legs** — the crawl overlay leads with the legs and a
+      "favors one leg" readout, since that is where Remy's signal is), or `--live-metrics` on `pose`
+      and `rerun`. `motor_metrics/live.py` feeds a
       rolling window to the *same* `hold_metrics`/`crawl_metrics` the offline table uses. Cost was
       never the obstacle (~3 ms per recompute against a 33 ms frame); the constraints are that the
       Savitzky-Golay fit leaves the last 3 samples extrapolated — so the readout is deliberately

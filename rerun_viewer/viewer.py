@@ -65,8 +65,10 @@ def _live_grid(mode: str) -> rrb.Grid:
     ]
     if mode == "crawl":
         views = [
-            rrb.TimeSeriesView(origin="live/cadence_cpm", name="cadence (cycles/min)"),
-            rrb.TimeSeriesView(origin="live/cycle_period_cv", name="cycle period CV"),
+            rrb.TimeSeriesView(origin="live/cadence_cpm", name="arm cadence (cycles/min)"),
+            rrb.TimeSeriesView(origin="live/leg_cadence_cpm", name="leg cadence (cycles/min)"),
+            rrb.TimeSeriesView(origin="live/leg_amplitude_symmetry", name="leg favor (+L / -R)"),
+            rrb.TimeSeriesView(origin="live/leg_cycle_period_cv", name="leg cycle period CV"),
         ]
     else:
         views = [
@@ -231,6 +233,11 @@ class PoseRerunLogger:
             "trunk_angle_delta_deg": metrics.live_trunk_angle_delta_deg,
             "cadence_cpm": metrics.live_cadence_cpm,
             "cycle_period_cv": metrics.live_cycle_period_cv,
+            "leg_cadence_cpm": metrics.live_leg_cadence_cpm,
+            "leg_cadence_cpm_left": metrics.live_leg_cadence_cpm_left,
+            "leg_cadence_cpm_right": metrics.live_leg_cadence_cpm_right,
+            "leg_cycle_period_cv": metrics.live_leg_cycle_period_cv,
+            "leg_amplitude_symmetry": metrics.live_leg_amplitude_symmetry,
         }
         for name, value in (*quality.items(), *measured.items()):
             if value == value:  # skip NaN, as _log_angles does
