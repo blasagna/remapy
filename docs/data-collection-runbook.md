@@ -32,9 +32,12 @@ Do these **in order, every time**, before Remy is on the mat:
    This is the single assumption every trunk-angle and sway number depends on.
 2. **Confirm tape positions** — camera and mat on their marks; same mat, same room, similar
    time of day, similar lighting.
-3. **Scale reference:** hold a rod or two markers of **known length (e.g. 30.0 cm)** where
-   Remy will sit, in frame, for **2–3 seconds**. This is the raw material for the scale check
-   — without it, every meter-denominated sway number that session is unverifiable.
+3. **Body-scale reference (monthly, off-camera):** if it's been a month since the last one,
+   tape-measure Remy's **shoulder width (acromion to acromion)** and **hip width** and write
+   them in the session notes. Nothing is held in frame — the scale check runs offline, against
+   the distance between landmarks 11 and 12 in `landmarks_world` over the `calib` segment.
+   (Earlier revisions asked for a known-length rod in frame; that check was never performable —
+   MediaPipe's pose landmarker emits only the 33 body landmarks, so a rod gets no coordinates.)
 4. **Start recording with a live view:**
    `pixi run rerun --record YYYY-MM-DD_HHMM_<setupid>.h5`. This spawns the Rerun viewer so you
    can **see the camera feed and skeleton overlay live** — use it to confirm framing, camera
@@ -184,8 +187,8 @@ Run `pixi run metrics YYYY-MM-DD_HHMM_<setupid>.h5 --csv out.csv` and check each
   noise. From these, per metric, compute `SEM = SD_within` and `MDC95 = 1.96 × √2 × SEM` —
   the smallest change later that counts as real.
 - **Do the scale + trunk-angle concurrent checks on at least the first session of every
-  reliability block** (protractor on a frozen `calib` frame for trunk angle; measured
-  known-length object for scale).
+  reliability block** (protractor on a frozen `calib` frame for trunk angle; tape-measured
+  shoulder width vs. `landmarks_world` over the `calib` segment for scale).
 
 ---
 
@@ -204,7 +207,9 @@ Run `pixi run metrics YYYY-MM-DD_HHMM_<setupid>.h5 --csv out.csv` and check each
 ## Keep front-of-mind while collecting
 
 - **Sway magnitudes have no home reference standard** — a second phone at another angle only
-  confirms bigger/smaller, not the absolute meters.
+  confirms bigger/smaller, not the absolute meters. The meters themselves are MediaPipe's
+  estimate of Remy's body size, not a calibrated measurement; the monthly body-scale check
+  catches *drift* in that estimate, which is all it can do.
 - **SPARC has no external ground truth** — its value is only meaningful against itself via the
   trial-1-vs-trial-3 fatigue contrast.
 - Everything here is **n = 1**, about Remy against his own baseline.
