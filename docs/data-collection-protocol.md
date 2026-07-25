@@ -1,6 +1,6 @@
 # Data Collection Protocol — Verification & Validation
 
-*remapy / motor_metrics · rev. 2026-07-17*
+*remapy / motor_metrics · rev. 2026-07-24*
 
 A single-subject measurement plan for confirming that the sitting, transition, crawl, and standing metrics reflect Remy's real movement — not artifacts of the camera, the model, or the filter chain.
 
@@ -49,7 +49,9 @@ That is the reliability ceiling with a purpose-built lab instrument. A single 30
 
 ### Landmark noise is the same order of magnitude as the signal
 
-Marker-free pose estimation compared against marker-based motion capture shows roughly 47% of landmark position errors under 20 mm, 80% under 30 mm, and about 10% exceeding 40 mm.[^3] Remy's postural sway is measured in single-digit centimeters — so landmark noise is not a rounding error next to the signal, it is on the same scale as it. This is exactly why the Concurrent validity section (below) includes a scale-validation step: before trusting a sway number in meters, confirm the camera's estimated metric scale against a physical object of known size.
+Marker-free pose estimation compared against marker-based motion capture shows roughly 47% of landmark position errors under 20 mm, 80% under 30 mm, and about 10% exceeding 40 mm.[^3] Remy's postural sway is measured in single-digit centimeters — so landmark noise is not a rounding error next to the signal, it is on the same scale as it.
+
+The meters those numbers are denominated in are themselves a model output. `landmarks_world` is metric because MediaPipe *estimates* a body scale from the pose, not because anything in the scene was calibrated — so an object of known size held in frame cannot check it (the pose landmarker emits only the 33 body points; a rod never gets coordinates, and its size constrains nothing in the model's estimate). The scale check in Concurrent validity below therefore compares the model's estimate against a tape-measured *body* dimension, which is the only reference this pipeline can actually be held to.
 
 ### The landmarks the metrics actually depend on
 
@@ -85,7 +87,7 @@ flowchart LR
 - [ ] **Fixed distance** — mark camera and child positions with floor tape (Fig. 2) so framing, and therefore `com_norm` speed scaling, stays comparable across sessions. If a taller tripod pushes the camera well above hip height, increasing this distance shrinks the framing problem — the offset between camera height and Remy's torso height subtends a smaller angle from farther away — which is the fix to reach for before ever tilting the camera.
 - [ ] **Full-body framing check** — at your fixed height and distance, confirm shoulders, hips, and both wrists sit inside the frame with margin, even with Remy sitting lower (or higher) than center. This is what a taller-than-ideal mount actually costs — a framing constraint, not a validity one.
 - [ ] **Same surface and lighting** — same mat, same room, similar time of day, to keep visibility/presence scores comparable rather than confounding "worse tracking" with "different room."
-- [ ] **Scale reference in frame** — before the child enters frame, hold a rod or two markers of known length (e.g. 30.0 cm) where the child will sit, for 2–3 seconds. This is the raw material for the scale check described later, in Concurrent validity.
+- [ ] **Body-scale reference — measured off-camera, not held in frame.** With a tape measure, record Remy's shoulder width (acromion to acromion) and hip width in the session notes; re-measure monthly, since he is growing and a stale number would read as scale drift. This is what the scale check in Concurrent validity compares against. Nothing goes in the frame for it — the check runs offline against the `calib` segment.
 
 > **If a fixed tilt is truly unavoidable,** measure it precisely (protractor or level app, not by eye) and reproduce that *exact* angle every session — a tripod head without an angle detent makes this harder than it sounds, and an inconsistent tilt turns a one-time bias into session-to-session noise, which is worse for trend detection than a constant offset would be. Do not lean on `signals.estimate_up()` to correct for it: that function cannot distinguish "the camera is tilted" from "Remy isn't sitting vertically," and for a child with a developmental delay the second possibility isn't negligible — using it here would reintroduce the exact confound this setup is designed to avoid. Increasing distance (above) is the lower-risk fix.
 
@@ -137,14 +139,14 @@ No home force plate or marker system exists, so "independent" here means a manua
 | Metric family | Reference standard | Agreement check |
 |---|---|---|
 | `duration_s` | Stopwatch or video-timestamp read by eye at in/out points | Should match within one frame (33 ms); a sanity check more than a validity test |
-| Metric scale (underlies every sway number) | Known-length object held in frame (Fixed setup checklist, above) before each session | Compare its length as reported by `landmarks_world` against the physical length; a mismatch invalidates every meter-denominated number from that session |
+| Metric scale (underlies every sway number) | Tape-measured shoulder width from the session notes (Fixed setup checklist, above) | Compare it against the median distance between landmarks 11 and 12 in `landmarks_world` over the `calib` segment. What matters is that the ratio *stays put* across sessions — a step change means MediaPipe re-scaled Remy between sessions, and that session's meter-denominated numbers are not comparable to the rest (angles and ratios are unaffected) |
 | `trunk_angle_mean_deg` | Freeze a frame from the `calib` segment; measure trunk angle from vertical with a protractor or inclinometer app on the still image | Should agree with `trunk_from_vertical` to within a few degrees |
 | Postural sway (path length, ellipse, RMS) | *No home reference standard exists.* Closest proxy: a second phone camera at a different angle, sway magnitude compared qualitatively (bigger/smaller), not numerically | Confirms sway isn't a single-camera artifact; does not validate the absolute magnitude (see Limitations, below) |
 | `cadence_cpm` (crawl) | A rater counts arm-pulls by eye from the recorded video (a stopwatch and tally, or scrubbing frame-by-frame in `annotate`) | Manual count × 60 / trial seconds should track `cadence_cpm_left` / `_right` within a pull or two |
 | `phase_offset` (crawl reciprocity) | A rater categorizes the same clip by eye: reciprocal (alternating), symmetric ("bunny" haul), or mixed | `phase_offset` should sit near 0.5 for rater-labeled "reciprocal" clips and near 0.0 for "symmetric" ones |
 | `sparc_trunk` (transition smoothness) | *No independent smoothness reference exists* in this or any published protocol — SPARC's value is deliberately self-referential (discussed above, and see `motor_metrics/transition.py`) | Use the known-contrast design under Sensitivity, below, instead of a concurrent reference |
 
-Do the scale and trunk-angle checks on the **first session of every reliability block** at minimum — they are cheap, and they are the two assumptions (metric scale, level camera) that silently bias every downstream number if wrong.
+Do the scale and trunk-angle checks on the **first session of every reliability block** at minimum — both are cheap, and both run offline off the `calib` segment. A tilted camera biases every trunk-angle and sway number; a shifted metric scale breaks the comparability of the sway family specifically, which is the one family that carries units.
 
 ## Sensitivity — confirming a metric moves when something real changes
 
@@ -180,6 +182,7 @@ These mirror the gating already built into the code (`motor_metrics.quality`, `G
 
 - **n = 1.** Nothing here generalizes to other children; every inference is about Remy specifically, against his own baseline.
 - **No lab-grade reference for sway.** The infant-CP force-plate figures (cited above) are the closest available context for what "good" reliability looks like in this population, not a number this setup is expected to match.
+- **The metric scale is a model estimate, not a calibration.** The meters in `landmarks_world` come from MediaPipe inferring Remy's body size from the pose; a single-camera recording contains no scene calibration, and no in-frame object can supply one. The body-dimension check above detects *drift* in that estimate between sessions — it cannot establish absolute accuracy, and no home-available method can. Metrics that are ratios or angles (`trunk_angle_*`, `phase_offset`, `cadence_cpm`, `sparc_trunk`) do not depend on it; the sway family does.
 - **SPARC has no external ground truth**, here or in the published literature — it is validated as an internally consistent, noise-robust-up-to-a-point measure (discussed above), never as an absolute score. The known-contrast design under Sensitivity is the only validity evidence this metric family can produce.
 - **Camera-only.** The Feather Sense IMU is out of scope for this phase (see `CLAUDE.md`) — no independent inertial cross-check on sway or trunk angle is available yet.
 - **Manual reference standards have their own error.** A human counting arm-pulls by eye or reading a protractor off a paused frame is not error-free either — treat the Concurrent validity checks as bounding gross disagreement, not certifying precision.

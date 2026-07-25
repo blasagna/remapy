@@ -109,9 +109,10 @@ def com_norm(norm: np.ndarray) -> np.ndarray:
     image fractions of width and height; column 2 is MediaPipe's relative depth, which
     is on a different and much weaker scale — do not mix it with the first two.
 
-    Any speed derived from this is in image-widths per second. Converting it to m/s
-    needs a scale reference; see :func:`motor_metrics.crawl.scale_m_per_norm` for what
-    that costs in accuracy.
+    Any speed derived from this is in image-widths per second, and it is never called
+    metres. Converting it honestly needs a scale reference this pipeline does not have —
+    a second camera or a floor fiducial, not cleverer math on this data. See
+    :mod:`motor_metrics.crawl`'s module docstring for why that trade is refused.
     """
     return mid(np.asarray(norm, dtype=np.float64), L.LEFT_HIP, L.RIGHT_HIP)
 
