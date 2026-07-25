@@ -83,13 +83,33 @@ class PosePipeline(
      */
     var blankWhenUnlocated: Boolean = true
 
-    private val computer = LiveMetricsComputer(mode)
+    /**
+     * Replaced wholesale by [reset]; never mutated in place.
+     *
+     * Reassigning a `LiveMetricsComputer` is how the rolling window is discarded at a camera
+     * switch. The kernel has no `reset()` of its own and should not grow one for this: it is
+     * verified against the Python implementation, which has no such concept because an offline
+     * segment cannot span a lens change.
+     */
+    @Volatile
+    private var computer = LiveMetricsComputer(mode)
     private val displayRing = BitmapRing()
     private val pending = ConcurrentHashMap<Long, Pending>()
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var lastTimestampMs = -1L
     private var lastFrameAtMs = 0L
     private var smoothedFps = 0.0
+
+    /**
+     * Set by [close]; stops frames being emitted after teardown.
+     *
+     * Volatile because it is written on the main thread and read on the analyzer and detector
+     * callback threads. Without it, an in-flight result from the *previous* camera can land in the
+     * UI after a flip — putting a stale frame on screen under live-looking chrome, and reviving a
+     * reference to a buffer whose owner has already gone away.
+     */
+    @Volatile
+    private var closed = false
 
     private class Pending(val bitmap: Bitmap, val image: MPImage)
 
@@ -139,6 +159,10 @@ class PosePipeline(
     }
 
     override fun analyze(image: ImageProxy) {
+        if (closed) {
+            image.close()
+            return
+        }
         try {
             val source = image.toBitmap()
             val rotated = source.rotated(image.imageInfo.rotationDegrees)
@@ -172,6 +196,10 @@ class PosePipeline(
         val timestampMs = result.timestampMs()
         val held = pending.remove(timestampMs) ?: return
         dropStale(timestampMs)
+        if (closed) {
+            held.image.close()
+            return
+        }
 
         try {
             val frame = LandmarkRows.from(result)
@@ -237,7 +265,34 @@ class PosePipeline(
         return smoothedFps
     }
 
+    /**
+     * Start over on a fresh rolling window, keeping the loaded models.
+     *
+     * Called when the camera changes. The window is a trailing few seconds of *one* view of the
+     * child, and the two lenses differ in framing, field of view and sensor — a window spanning the
+     * switch would average sway across a discontinuity that has nothing to do with him, the same
+     * refusal `longest_run` makes about bridging a tracking dropout.
+     *
+     * **This exists instead of rebuilding the pipeline**, which is what the first version did and
+     * what segfaulted: closing a `PoseLandmarker` on the main thread while the analyzer thread is
+     * inside `detectAsync` is a use-after-free in native code, and a `closed` flag only narrows
+     * that window rather than closing it. Not destroying the task at all removes the race by
+     * construction, and makes the flip faster besides — no 5.7 MB model reload.
+     *
+     * `lastTimestampMs` is deliberately *not* rewound: MediaPipe requires monotonically increasing
+     * timestamps across the life of the task, and the task survives this call.
+     */
+    fun reset() {
+        computer = LiveMetricsComputer(mode)
+        smoothedFps = 0.0
+        lastFrameAtMs = 0L
+    }
+
     fun close() {
+        // Flag first: it is what stops a result already in flight from reaching the UI while the
+        // rest of this method pulls the resources out from under it. Teardown only happens when
+        // the activity is going away, so nothing needs the pipeline afterwards.
+        closed = true
         landmarker.close()
         faceDetector.close()
         pending.values.forEach { it.image.close() }

@@ -1,8 +1,10 @@
 package dev.remapy.app
 
 import android.graphics.Bitmap
+import androidx.camera.core.CameraSelector
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,12 +12,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -42,9 +46,22 @@ fun CameraScreen(
     metrics: LiveMetrics?,
     fps: Double,
     usingGpu: Boolean,
+    lensFacing: Int,
+    canFlipCamera: Boolean,
+    onFlipCamera: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+        // Drawn before the early return so the control stays reachable while the camera is
+        // starting up — including right after a flip, when there is briefly no frame yet.
+        if (canFlipCamera) {
+            FlipCameraButton(
+                lensFacing = lensFacing,
+                onClick = onFlipCamera,
+                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+            )
+        }
+
         if (bitmap == null) {
             Text(
                 "waiting for camera...",
@@ -119,6 +136,37 @@ private fun DrawScope.drawSkeleton(
     for (i in 0 until Landmarks.COUNT) {
         val p = pointOf(i) ?: continue
         drawCircle(color = colorOf(i), radius = 4f, center = p)
+    }
+}
+
+/**
+ * Rear/front lens toggle.
+ *
+ * Top-right, well clear of the metrics panel in the top-left. Sized generously because it gets
+ * pressed one-handed while the other hand is steadying a child, and it names the lens rather than
+ * using a bare flip glyph — the operator needs to know which camera is live without looking at the
+ * image to work it out.
+ */
+@Composable
+private fun FlipCameraButton(lensFacing: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val label = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+        "front"
+    } else {
+        "rear"
+    }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xB0000000))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Text(
+            "⟲  $label",
+            color = Color.White,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 14.sp,
+        )
     }
 }
 

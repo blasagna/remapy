@@ -64,6 +64,13 @@ class MainActivity : ComponentActivity() {
     private var usingGpu by mutableStateOf(false)
     private var hasCamera by mutableStateOf(false)
 
+    private var lensFacing by mutableStateOf(CameraSelector.LENS_FACING_BACK)
+
+    /** Whether the *other* lens exists. Tablets and some phones have only one. */
+    private var canFlipCamera by mutableStateOf(false)
+
+    private var cameraProvider: ProcessCameraProvider? = null
+
     private val requestCamera = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -88,6 +95,9 @@ class MainActivity : ComponentActivity() {
                         metrics = metrics,
                         fps = fps,
                         usingGpu = usingGpu,
+                        lensFacing = lensFacing,
+                        canFlipCamera = canFlipCamera,
+                        onFlipCamera = ::flipCamera,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -102,12 +112,50 @@ class MainActivity : ComponentActivity() {
         if (hasCamera) startCamera() else requestCamera.launch(Manifest.permission.CAMERA)
     }
 
+    /**
+     * Switch to the other lens.
+     *
+     * Rebinds CameraX and resets the rolling metrics window; the MediaPipe tasks are **kept**. An
+     * earlier version rebuilt the whole pipeline here and segfaulted — closing a `PoseLandmarker`
+     * on the main thread races the analyzer thread inside `detectAsync`, which is a use-after-free
+     * in native code that no flag can reliably guard. See [PosePipeline.reset].
+     */
+    private fun flipCamera() {
+        if (!canFlipCamera) return
+        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+            CameraSelector.LENS_FACING_FRONT
+        } else {
+            CameraSelector.LENS_FACING_BACK
+        }
+        // Blank the view immediately rather than leaving the last frame of the previous camera on
+        // screen while the new one warms up — a stale image with live-looking chrome around it.
+        bitmap = null
+        frame = null
+        metrics = null
+        fps = 0.0
+        pipeline?.reset()
+        startCamera()
+    }
+
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             try {
                 val provider = providerFuture.get()
-                val pipe = PosePipeline(this, LiveMetricsComputer.HOLD) { rendered ->
+                cameraProvider = provider
+
+                val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+                if (!provider.hasCamera(selector)) {
+                    Log.w(TAG, "no camera for lensFacing=$lensFacing; staying on the current one")
+                    return@addListener
+                }
+                canFlipCamera = provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) &&
+                    provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)
+
+                // Built once for the life of the activity. Loading the 5.7 MB pose bundle is not
+                // the reason — the reason is that destroying a MediaPipe task while frames are in
+                // flight is a native use-after-free.
+                val pipe = pipeline ?: PosePipeline(this, LiveMetricsComputer.HOLD) { rendered ->
                     // MediaPipe calls back off the main thread; Compose state must be written on it.
                     runOnUiThread {
                         bitmap = rendered.bitmap
@@ -141,7 +189,15 @@ class MainActivity : ComponentActivity() {
                 provider.unbindAll()
                 // No `Preview` use case on purpose: it would put the raw camera stream on screen
                 // without passing through face redaction. See `FaceRedaction`.
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
+                //
+                // The front camera's frames are deliberately **not mirrored**. A selfie preview
+                // flips horizontally to look natural, but that flip would swap the child's left and
+                // right as MediaPipe sees them — and the sign of `live_leg_amplitude_symmetry` is
+                // precisely "which leg", the signal this whole mode exists to report. A mirrored
+                // front-camera session would silently invert it. The un-mirrored view reads oddly
+                // if you point it at yourself; it is correct when pointed at Remy, which is the
+                // only thing this app is for.
+                provider.bindToLifecycle(this, selector, analysis)
             } catch (e: Exception) {
                 Log.e(TAG, "camera start failed", e)
             }

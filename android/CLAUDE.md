@@ -106,6 +106,24 @@ Things worth knowing before editing:
 - GPU delegate with **CPU fallback**, which is exercised: the emulator has no OpenCL and falls back
   cleanly. The delegate in use is on screen next to the frame rate, because it is a plausible cause
   of a device that cannot hold 30 fps.
+- **The rear/front toggle must never mirror the front camera.** A selfie preview flips horizontally
+  to look natural, and that flip would swap the child's left and right *as MediaPipe sees them* —
+  which silently inverts the sign of `live_leg_amplitude_symmetry`, the "which leg does he favour"
+  reading this mode exists to produce. CameraX's analysis buffer is un-mirrored as delivered, so the
+  correct implementation is to do nothing; the trap is "fixing" the front view because it reads
+  oddly when pointed at yourself. It is correct when pointed at Remy, which is the only use.
+  Flipping calls `PosePipeline.reset()`, discarding the rolling window: the two lenses differ in
+  framing, field of view and sensor, and a window spanning the switch would average sway across a
+  discontinuity that has nothing to do with him — the same refusal `longest_run` makes about
+  bridging a dropout. The toggle hides itself on a device with only one lens.
+- **Never destroy a MediaPipe task while frames are in flight.** The first camera-flip
+  implementation rebuilt the whole pipeline, and closing a `PoseLandmarker` on the main thread
+  while the analyzer thread sat inside `detectAsync` segfaulted in native code
+  (`PacketCreator.nativeCreateProto`) after a handful of flips. A `@Volatile closed` flag narrows
+  that window but cannot close it — the check and the call are not atomic. The tasks are therefore
+  built **once for the life of the activity**, and a flip only rebinds CameraX and swaps the
+  `LiveMetricsComputer`. Anything that feels like it wants to tear down and rebuild the detector
+  should be re-examined against this.
 - `Overlay` ports `live_draw.py` — same row order, same `--` for NaN, same colour semantics
   (coverage green/red against the gate, `up:` orange), same `sitSteadiness` reading the trunk's
   deviation from its *own* window baseline rather than an absolute upright angle.

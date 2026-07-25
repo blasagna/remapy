@@ -43,10 +43,18 @@ class BitmapRing(private val capacity: Int = 3) {
         return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { buffers[i] = it }
     }
 
+    /**
+     * Drop the ring's references. **Deliberately does not recycle.**
+     *
+     * Every buffer this ring has handed out may still be referenced by the UI — Compose holds the
+     * most recent one in state and can draw it a frame or two after the pipeline is torn down.
+     * Recycling here is a use-after-free that surfaces as `Canvas: trying to use a recycled bitmap`
+     * on the next compose pass, which is exactly what happened the first time the camera-flip
+     * teardown called it. Dropping the references is enough: the buffers become garbage as soon as
+     * the UI moves on, and the whole point of the ring is to bound *allocation churn* during a
+     * session, not to free eagerly at the end of one.
+     */
     fun release() {
-        for (i in buffers.indices) {
-            buffers[i]?.recycle()
-            buffers[i] = null
-        }
+        for (i in buffers.indices) buffers[i] = null
     }
 }
