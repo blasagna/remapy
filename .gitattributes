@@ -1,2 +1,6 @@
 # SCM syntax highlighting & preventing 3-way merges
 pixi.lock merge=binary linguist-language=YAML linguist-generated=true
+
+# Cross-language metrics goldens, written by `pixi run export-fixtures`. Regenerated
+# whole, never hand-edited, and a diff on it is unreadable by design.
+android/metrics/src/test/resources/goldens.json merge=binary linguist-generated=true
