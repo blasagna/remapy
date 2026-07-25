@@ -27,6 +27,7 @@ Each entry links to the package's own `CLAUDE.md` (loaded on demand when you wor
 - `motor_metrics/` — continuous motor metrics for GMFM-88 trials (offline + live) → `motor_metrics/CLAUDE.md`
 - `list_devices/` — enumerate compatible capture devices → `list_devices/CLAUDE.md`
 - `adafruit_feather_sense/` — CircuitPython IMU streamer (serial/BLE) + host readers → `adafruit_feather_sense/CLAUDE.md`
+- `android/` — Kotlin port of the live metrics kernel (separate Gradle build) → `android/CLAUDE.md`
 
 ## Global conventions
 
@@ -85,6 +86,9 @@ Tasks defined under `[tasks]` in `pixi.toml`:
   (`--live-metrics {hold,crawl}` on `pose` and `rerun`; `--live-window-s` to change the window).
 - `pixi run notebook` — Jupyter Lab in `notebooks/` (offline metric exploration).
 - `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
+- `pixi run export-fixtures` — regenerate the cross-language metrics goldens the Kotlin port is
+  tested against (`android/metrics/src/test/resources/goldens.json`). **Re-run it whenever a
+  `derive.py` constant changes**, or the port stays pinned to the old filter chain.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
 rather than run ad hoc.
@@ -119,6 +123,9 @@ display, or GPU; ~480 tests run in a few seconds. **Per-file test notes live in 
 - Pure logic (`redact`, `angles`, `pose_blur`, `factory`) runs unmocked against real NumPy/OpenCV.
 - Discovery is `python -m unittest discover -s tests -t .`; run from the repo root so the packages
   import. `tests/` is a package (`__init__.py`) so `from tests.fakes import …` resolves.
+- `tests/fixtures/export.py` is **not a test** — it is the generator for the cross-language goldens
+  the Kotlin port in `android/` is checked against (`pixi run export-fixtures`). It has no
+  `TestCase` and does not match the `test*.py` discovery pattern, so the suite ignores it.
 
 ## Notes
 
