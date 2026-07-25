@@ -66,6 +66,9 @@ class MainActivity : ComponentActivity() {
 
     private var lensFacing by mutableStateOf(CameraSelector.LENS_FACING_BACK)
 
+    /** Which exercise the live readout is measuring. `hold` is the common case, so it is the default. */
+    private var liveMode by mutableStateOf(LiveMetricsComputer.HOLD)
+
     /** Whether the *other* lens exists. Tablets and some phones have only one. */
     private var canFlipCamera by mutableStateOf(false)
 
@@ -98,6 +101,8 @@ class MainActivity : ComponentActivity() {
                         lensFacing = lensFacing,
                         canFlipCamera = canFlipCamera,
                         onFlipCamera = ::flipCamera,
+                        mode = liveMode,
+                        onToggleMode = ::toggleMode,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -137,6 +142,27 @@ class MainActivity : ComponentActivity() {
         startCamera()
     }
 
+    /**
+     * Switch the live readout between sitting/standing holds and belly-crawl.
+     *
+     * Only the metric dispatch changes — the camera keeps running and the models stay loaded. The
+     * readout blanks and re-warms over the next few seconds because the rolling window is
+     * discarded; see [PosePipeline.setMode] for why that is not avoidable.
+     *
+     * Worth knowing which mode you are in beyond the label: `crawl` reads **no vertical at all**
+     * (the axis is the body's own trunk vector), which makes it the camera-robust one, while
+     * `hold` inherits `WORLD_UP`'s level-camera assumption. The `up` row on the overlay says which.
+     */
+    private fun toggleMode() {
+        liveMode = if (liveMode == LiveMetricsComputer.HOLD) {
+            LiveMetricsComputer.CRAWL
+        } else {
+            LiveMetricsComputer.HOLD
+        }
+        metrics = null
+        pipeline?.setMode(liveMode)
+    }
+
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
@@ -155,7 +181,7 @@ class MainActivity : ComponentActivity() {
                 // Built once for the life of the activity. Loading the 5.7 MB pose bundle is not
                 // the reason — the reason is that destroying a MediaPipe task while frames are in
                 // flight is a native use-after-free.
-                val pipe = pipeline ?: PosePipeline(this, LiveMetricsComputer.HOLD) { rendered ->
+                val pipe = pipeline ?: PosePipeline(this, liveMode) { rendered ->
                     // MediaPipe calls back off the main thread; Compose state must be written on it.
                     runOnUiThread {
                         bitmap = rendered.bitmap

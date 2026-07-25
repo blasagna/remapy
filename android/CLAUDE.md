@@ -124,6 +124,11 @@ Things worth knowing before editing:
   built **once for the life of the activity**, and a flip only rebinds CameraX and swaps the
   `LiveMetricsComputer`. Anything that feels like it wants to tear down and rebuild the detector
   should be re-examined against this.
+- **Two overlay controls, top-right**: exercise mode (`hold`/`crawl`) and lens (`rear`/`front`).
+  Both show their current state as a word rather than a glyph, because the operator has to know
+  which is live without inferring it from the image. Switching mode discards the rolling window —
+  unavoidably, since the two modes use different window lengths (5 s vs 6 s, a crawl needing
+  several pull cycles before its period CV means anything) — so the readout blanks and re-warms.
 - `Overlay` ports `live_draw.py` — same row order, same `--` for NaN, same colour semantics
   (coverage green/red against the gate, `up:` orange), same `sitSteadiness` reading the trunk's
   deviation from its *own* window baseline rather than an absolute upright angle.
@@ -251,5 +256,5 @@ treat a capture-device change as a new baseline.
   derivative-gain table no longer describes the filter. The rate and delegate are on screen for
   exactly this; the emulator's 25 fps under swiftshader says nothing about a phone.
 - **Pose quality has never been observed.** No run has yet put a person in front of the camera.
-- **No mode switch in the UI.** `LiveMetricsComputer.HOLD` is hard-coded in `MainActivity`; crawl
-  mode is reachable only by editing that line.
+- **Crawl mode has never been exercised against a real crawl.** The toggle works and the kernel is
+  verified, but no camera has yet seen the thing it measures.

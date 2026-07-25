@@ -49,17 +49,33 @@ fun CameraScreen(
     lensFacing: Int,
     canFlipCamera: Boolean,
     onFlipCamera: () -> Unit,
+    mode: String,
+    onToggleMode: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        // Drawn before the early return so the control stays reachable while the camera is
-        // starting up — including right after a flip, when there is briefly no frame yet.
-        if (canFlipCamera) {
-            FlipCameraButton(
-                lensFacing = lensFacing,
-                onClick = onFlipCamera,
-                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+        // Drawn before the early return so the controls stay reachable while the camera is
+        // starting up — including right after a flip or a mode change, when the window is empty
+        // and there is briefly no frame yet.
+        Column(
+            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OverlayButton(
+                // The exercise being watched, and the thing that changes what every row below
+                // means. Named rather than iconified for that reason.
+                label = mode,
+                glyph = "⇄",
+                onClick = onToggleMode,
             )
+            if (canFlipCamera) {
+                OverlayButton(
+                    label = if (lensFacing == CameraSelector.LENS_FACING_FRONT) "front" else "rear",
+                    glyph = "⟲",
+                    onClick = onFlipCamera,
+                )
+            }
         }
 
         if (bitmap == null) {
@@ -140,20 +156,20 @@ private fun DrawScope.drawSkeleton(
 }
 
 /**
- * Rear/front lens toggle.
+ * A control in the top-right stack.
  *
- * Top-right, well clear of the metrics panel in the top-left. Sized generously because it gets
- * pressed one-handed while the other hand is steadying a child, and it names the lens rather than
- * using a bare flip glyph — the operator needs to know which camera is live without looking at the
- * image to work it out.
+ * Top-right keeps it well clear of the metrics panel in the top-left. Sized generously because it
+ * gets pressed one-handed while the other hand is steadying a child, and each shows its **current
+ * state as a word** rather than a bare glyph — the operator needs to know which camera and which
+ * exercise are live without studying the image to infer it.
  */
 @Composable
-private fun FlipCameraButton(lensFacing: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val label = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-        "front"
-    } else {
-        "rear"
-    }
+private fun OverlayButton(
+    label: String,
+    glyph: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
@@ -162,7 +178,7 @@ private fun FlipCameraButton(lensFacing: Int, onClick: () -> Unit, modifier: Mod
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(
-            "⟲  $label",
+            "$glyph  $label",
             color = Color.White,
             fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,

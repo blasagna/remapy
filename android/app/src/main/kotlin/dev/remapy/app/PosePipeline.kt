@@ -52,7 +52,7 @@ class RenderedFrame(
  */
 class PosePipeline(
     context: Context,
-    private val mode: String,
+    initialMode: String,
     private val onFrame: (RenderedFrame) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
@@ -69,6 +69,10 @@ class PosePipeline(
 
     /** Whether the pose model is running on the GPU delegate. Reported on screen. */
     var usingGpu: Boolean = false
+        private set
+
+    /** `hold` or `crawl` — which metric the rolling window is dispatched to. Change via [setMode]. */
+    var mode: String = initialMode
         private set
 
     var redactionMethod: FaceRedaction.Method = FaceRedaction.Method.HYBRID
@@ -92,7 +96,7 @@ class PosePipeline(
      * segment cannot span a lens change.
      */
     @Volatile
-    private var computer = LiveMetricsComputer(mode)
+    private var computer = LiveMetricsComputer(initialMode)
     private val displayRing = BitmapRing()
     private val pending = ConcurrentHashMap<Long, Pending>()
     private val startedAtMs = SystemClock.elapsedRealtime()
@@ -286,6 +290,25 @@ class PosePipeline(
         computer = LiveMetricsComputer(mode)
         smoothedFps = 0.0
         lastFrameAtMs = 0L
+    }
+
+    /**
+     * Switch between `hold` and `crawl`.
+     *
+     * The rolling window is discarded, so the readout blanks and re-warms over the next few
+     * seconds. That is not avoidable by keeping the buffered frames: the two modes use *different
+     * window lengths* (5 s for a hold, 6 s for a crawl, because cadence variability needs several
+     * pull cycles before it means anything), so there is no single buffer that is correct for both.
+     * It is also not a problem in practice — a mode switch is a deliberate act between trials, not
+     * something done mid-measurement.
+     */
+    fun setMode(newMode: String) {
+        if (newMode == mode) return
+        require(LiveMetricsComputer.MODE_WINDOW_S.containsKey(newMode)) {
+            "mode must be one of ${LiveMetricsComputer.MODE_WINDOW_S.keys}, got '$newMode'."
+        }
+        mode = newMode
+        reset()
     }
 
     fun close() {
