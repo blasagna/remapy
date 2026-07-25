@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Fullscreen and black. The operator is watching a camera view of their child across a room,
+      often in indifferent lighting; chrome competes with the thing they are looking at.
+    -->
+    <style name="Theme.Remapy" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
