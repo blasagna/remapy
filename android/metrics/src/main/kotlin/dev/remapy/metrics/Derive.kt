@@ -18,15 +18,25 @@ import kotlin.math.max
  * default `mode="interp"` does not pad the signal: it fits one polynomial of order [POLY] to
  * the first `windowLength` samples and evaluates it at each of the first `halfWindow`
  * positions, and likewise at the tail. A port that mirrors, reflects or zero-pads instead
- * will agree on every interior sample and disagree on exactly the three that the live
- * instantaneous readout is taken from. `SavgolTest` and `LiveLagIdentityTest` pin it.
+ * will agree on every interior sample and disagree on exactly the `windowLength / 2` that the
+ * live instantaneous readout is taken from. `SavgolTest` and `LiveLagIdentityTest` pin it.
  */
 object Derive {
-    /** Hz, the uniform grid every derived quantity is computed on. */
-    const val FS: Double = 30.0
+    /**
+     * Hz, the uniform grid every derived quantity is computed on.
+     *
+     * 15 because that is what the capture hardware sustains — the phone measured 15-20 fps
+     * and both it and the desktop CLIs now request 15. Resampling *up* to a grid faster than
+     * the camera delivers adds no information; it manufactures samples that are exact linear
+     * combinations of their neighbours, and the filter then averages over samples that are
+     * partly each other.
+     */
+    const val FS: Double = 15.0
 
-    /** Savitzky-Golay window, in seconds. */
-    const val WINDOW_S: Double = 0.25
+    /**
+     * Savitzky-Golay window, in seconds. **Paired with [FS]** — see [windowLength].
+     */
+    const val WINDOW_S: Double = 0.35
 
     /** Savitzky-Golay polynomial order. */
     const val POLY: Int = 2
@@ -36,6 +46,14 @@ object Derive {
      *
      * `max(int(window_s * fs), poly + 1)` in Python truncates toward zero; [windowLength]
      * only ever sees positive input, so [floor] matches.
+     *
+     * **The degenerate case is real and silent.** `poly + 1` samples fit a polynomial of order
+     * [POLY] *exactly*, so a window that small is an interpolation rather than a fit: `deriv=0`
+     * returns its input untouched and `deriv=1` collapses to a plain central difference, with
+     * nothing raised and nothing NaN. At [POLY] = 2 that is `w == 3`, which `windowS = 0.25`
+     * produces at any `fs` in [12, 20) — exactly where a 15 Hz grid sits. [WINDOW_S] is
+     * therefore paired with [FS] and the two move together; `ConstantsTest` pins the pair
+     * against the Python side's own value.
      */
     fun windowLength(fs: Double = FS, windowS: Double = WINDOW_S, poly: Int = POLY): Int {
         val w = max(floor(windowS * fs).toInt(), poly + 1)
@@ -173,7 +191,7 @@ object Derive {
      *
      * `pos = windowLength / 2` gives scipy's centred `savgol_coeffs`; other values give the
      * edge coefficients `mode="interp"` uses. Solved as a small normal-equation system —
-     * the window is 7 samples at the shipped constants, so a general least-squares routine
+     * the window is 5 samples at the shipped constants, so a general least-squares routine
      * would be more machinery than the problem has.
      */
     fun savgolCoefficients(

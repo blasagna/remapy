@@ -19,6 +19,7 @@ import time
 
 from adafruit_feather_sense import open_feather
 from face_blur.factory import BLUR_METHODS, build_blurrer
+from motor_metrics import derive
 from motor_metrics.live import MODE_WINDOW_S, MODES, LiveMetricsComputer
 from motor_metrics.live_draw import draw_live_metrics
 from pose_estimation.estimator import PoseEstimator
@@ -37,6 +38,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--width", type=int, default=1280, help="Requested frame width (default: 1280).")
     parser.add_argument("--height", type=int, default=720, help="Requested frame height (default: 720).")
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=derive.FS,
+        help=(
+            "Requested capture rate (default: %(default)s, the motor_metrics grid). "
+            "Advisory — many webcams ignore it; a warning is printed when the device "
+            "reports a different rate, because capturing above the grid means the "
+            "metrics chain decimates without anti-aliasing."
+        ),
+    )
     parser.add_argument("--model", default=None, help="Path to a pose_landmarker .task file.")
     parser.add_argument(
         "--max-frames",
@@ -188,9 +200,12 @@ def main(argv: list[str] | None = None) -> int:
             feather=feather is not None,
             live=live_mode,
         )
-        with VideoCapture(source, width=args.width, height=args.height) as cap, \
+        with VideoCapture(source, width=args.width, height=args.height, fps=args.fps) as cap, \
                 PoseEstimator(model_path=args.model) as pose:
             print(f"Opened source {source!r} at resolution {cap.resolution[0]}x{cap.resolution[1]}")
+            fps_note = cap.fps_warning()
+            if fps_note:
+                print(fps_note)
             if args.save:
                 print(f"Recording to {args.save}. Press Ctrl+C to stop.")
             else:

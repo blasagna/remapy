@@ -167,8 +167,9 @@ before fixing.
 
 The overlay shows the things that are still unproven:
 
-- **`fps`** — green at ≥ 25. Below that the 30 Hz filter chain is resampling *up* and inventing
-  correlated samples. The `gpu`/`cpu` label beside it is the first thing to suspect.
+- **`fps`** — green at ≥ 13.5 (90 % of the 15 Hz grid). Below that the filter chain is resampling
+  *up* and inventing correlated samples. The `gpu`/`cpu` label beside it is the first thing to
+  suspect. The app caps itself at 15 to match the grid, so a healthy reading sits at 15, not above.
 - **`coverage`** — green means the torso landmarks are trusted. Metrics read `--` rather than a
   stale number when it drops; that is the intended behaviour, not a bug.
 - **`up world_y`** — a reminder that the vertical assumes a level camera.
@@ -199,9 +200,9 @@ The overlay shows the things that are still unproven:
       "favors one leg" readout, since that is where Remy's signal is), or `--live-metrics` on `pose`
       and `rerun`. `motor_metrics/live.py` feeds a
       rolling window to the *same* `hold_metrics`/`crawl_metrics` the offline table uses. Cost was
-      never the obstacle (~3 ms per recompute against a 33 ms frame); the constraints are that the
-      Savitzky-Golay fit leaves the last 3 samples extrapolated — so the readout is deliberately
-      100 ms old, where it equals the offline value *exactly* — and that without an annotator there
+      never the obstacle (~3 ms per recompute against a 67 ms frame); the constraints are that the
+      Savitzky-Golay fit leaves the last 2 samples extrapolated — so the readout is deliberately
+      133 ms old, where it equals the offline value *exactly* — and that without an annotator there
       is no honest trial boundary, so the window is fixed and **nothing infers movement onset**.
       SPARC, submovement counts and any duration metric are therefore still offline-only: they need
       an onset/offset the code is not entitled to invent. Live values never enter the `.h5` or the

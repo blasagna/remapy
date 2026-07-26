@@ -128,7 +128,7 @@ def pack_scores(arr):
 # Signal builders — shared by several cases so the Kotlin side sees one shape
 # --------------------------------------------------------------------------- #
 
-def jittered_ms(n, fps=30.0, jitter_ms=4.0, seed=7):
+def jittered_ms(n, fps=derive.FS, jitter_ms=4.0, seed=7):
     """A realistic camera timebase: nominally ``fps``, never exactly.
 
     ``resample_uniform`` exists because of this wobble, so feeding it a perfect grid would
@@ -139,12 +139,12 @@ def jittered_ms(n, fps=30.0, jitter_ms=4.0, seed=7):
     return np.cumsum(np.round(step + rng.uniform(-jitter_ms, jitter_ms, n))).astype(np.int64)
 
 
-def sine(n, freq_hz, amplitude, fps=30.0, phase=0.0, offset=0.0):
+def sine(n, freq_hz, amplitude, fps=derive.FS, phase=0.0, offset=0.0):
     t = np.arange(n) / fps
     return offset + amplitude * np.sin(2 * np.pi * freq_hz * t + phase)
 
 
-def swaying_body(n=180, fps=30.0, amplitude=0.03, freq_hz=0.4, trunk_len=0.35):
+def swaying_body(n=180, fps=derive.FS, amplitude=0.03, freq_hz=0.4, trunk_len=0.35):
     """A seated child swaying medio-laterally: trunk tipping side to side about vertical."""
     x = sine(n, freq_hz, amplitude, fps=fps)
     z = sine(n, freq_hz * 0.7, amplitude * 0.5, fps=fps, phase=1.1)
@@ -152,7 +152,7 @@ def swaying_body(n=180, fps=30.0, amplitude=0.03, freq_hz=0.4, trunk_len=0.35):
     return body_world(trunk)
 
 
-def crawling_body(n=200, fps=30.0, trunk_len=0.30, cadence_hz=0.9):
+def crawling_body(n=200, fps=derive.FS, trunk_len=0.30, cadence_hz=0.9):
     """A prone belly-crawl: wrists and knees oscillating along the body axis, alternating.
 
     Arms are given a near-anti-phase relationship and legs a deliberately *asymmetric*
@@ -221,6 +221,12 @@ def case_window_length():
         for fs, w, p in [
             (30.0, 0.25, 2), (30.0, 0.2, 2), (30.0, 0.233, 2),
             (60.0, 0.25, 2), (30.0, 0.05, 2), (30.0, 0.25, 3), (10.0, 0.01, 4),
+            # The 15 Hz grid, and the trap beside it. (15.0, 0.25, 2) -> 3, and a
+            # 3-sample/order-2 Savitzky-Golay fit is an exact interpolating polynomial:
+            # the filter becomes the identity and stops filtering with no error anywhere.
+            # Pinned in both languages so the collapse is a *tested* fact rather than
+            # something the next person rediscovers the hard way.
+            (15.0, 0.35, 2), (15.0, 0.25, 2), (15.0, 0.5, 2),
         ]
     ]
 
@@ -245,8 +251,11 @@ def case_savgol():
         ("noisy_deriv1", noisy, 1),
         ("two_col_deriv0", two_col, 0),
         ("two_col_deriv1", two_col, 1),
-        ("exactly_window", np.arange(7, dtype=np.float64) ** 2, 0),
-        ("shorter_than_window", np.arange(6, dtype=np.float64), 0),
+        # Sized off `window_length()` rather than the literal it happens to equal: these two
+        # cases exist to straddle the short-input NaN boundary, and a hardcoded 7/6 would
+        # quietly stop straddling anything the moment a `derive.py` constant moved.
+        ("exactly_window", np.arange(derive.window_length(), dtype=np.float64) ** 2, 0),
+        ("shorter_than_window", np.arange(derive.window_length() - 1, dtype=np.float64), 0),
         ("empty", np.empty(0), 0),
     ]:
         cases.append({

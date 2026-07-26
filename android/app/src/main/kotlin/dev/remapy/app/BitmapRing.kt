@@ -6,7 +6,7 @@ import android.graphics.Bitmap
  * A tiny fixed ring of reusable display bitmaps.
  *
  * **Why this exists.** A 1280x720 ARGB_8888 bitmap is ~3.7 MB, and since Android 8 that lives on
- * the *native* heap. Allocating a fresh one per frame at 25-30 fps is ~100 MB/s of churn, which
+ * the *native* heap. Allocating a fresh one per frame at 15 fps is ~55 MB/s of churn, which
  * outruns the GC: measured on the emulator, the app's native heap climbed 217 -> 358 MB in under
  * two minutes and kept going. A therapy session is minutes long, so "it settles eventually" is not
  * good enough — that is an out-of-memory kill partway through a trial.

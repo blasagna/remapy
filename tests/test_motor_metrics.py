@@ -514,6 +514,24 @@ class WindowLengthTests(unittest.TestCase):
         self.assertEqual(window_length(30.0, 0.25, 2), 7)
         self.assertEqual(window_length(100.0, 0.25, 2), 25)
 
+    def test_the_shipped_constants_do_not_degenerate(self):
+        # The pairing pin. `poly + 1` samples fit a quadratic *exactly*, so a 3-sample
+        # window is an interpolation and the filter silently becomes the identity — no
+        # exception, no NaN, just an unfiltered signal. FS and WINDOW_S must therefore
+        # move together, and this asserts the shipped pair clears the floor.
+        self.assertGreater(window_length(), POLY + 1)
+
+    def test_a_quarter_second_window_collapses_at_fifteen_hertz(self):
+        # The trap that FS 30 -> 15 walked into, pinned so the next person finds it here
+        # rather than in a month of quietly unsmoothed sway numbers. int(0.25*15) == 3.
+        self.assertEqual(window_length(15.0, 0.25, 2), POLY + 1)
+        # ...and at that window the "filter" hands back its input untouched, which is the
+        # part that makes the collapse dangerous rather than merely wrong.
+        x = np.array([0.0, 1.0, 5.0, 2.0, 9.0, 3.0, 4.0])
+        np.testing.assert_allclose(
+            smooth(x, fs=15.0, window_s=0.25, poly=2), x, atol=1e-12
+        )
+
 
 class ResampleUniformTests(unittest.TestCase):
     def test_uniform_input_is_preserved(self):
@@ -596,20 +614,26 @@ class SmoothTests(unittest.TestCase):
         np.testing.assert_allclose(smooth(1.0 * t, deriv=1), np.ones(60), atol=1e-6)
 
     def test_derivative_of_a_sway_rate_sine(self):
-        # 0.5 Hz is the band postural sway actually lives in; there the chain is ~99%
-        # accurate. Interior only: savgol's polynomial edge fit is weakest at the ends.
+        # 0.5 Hz is the band postural sway actually lives in; there the chain is ~97.5%
+        # accurate (measured max interior residual 0.077 against a peak derivative of
+        # 3.142). Interior only: savgol's polynomial edge fit is weakest at the ends.
+        #
+        # This is a second pin on the same passband the gain table pins, and it moves for
+        # the same reason: the window is 0.333 s at the shipped constants rather than the
+        # 0.233 s it spanned at FS=30, and a longer window attenuates more. If this starts
+        # failing, re-measure the chain before touching the tolerance.
         f = 0.5
         t = np.arange(300) / FS
         got = smooth(np.sin(2 * np.pi * f * t), deriv=1)
         expected = 2 * np.pi * f * np.cos(2 * np.pi * f * t)
-        np.testing.assert_allclose(got[20:-20], expected[20:-20], atol=0.05)
+        np.testing.assert_allclose(got[20:-20], expected[20:-20], atol=0.09)
 
     def test_derivative_gain_rolls_off_with_frequency(self):
         # Pins the passband documented in the module docstring. This attenuation is a
         # real property of the pinned chain, not a defect: it is the same for every
         # trial, so it cancels within-child. It must not drift silently, because a
         # changed window would move every historical number without touching the data.
-        expected = {0.25: 0.997, 0.5: 0.987, 1.0: 0.950, 2.0: 0.809, 3.0: 0.607}
+        expected = {0.25: 0.994, 0.5: 0.975, 1.0: 0.904, 2.0: 0.652, 3.0: 0.339}
         for f, gain in expected.items():
             t = np.arange(600) / FS
             got = smooth(np.sin(2 * np.pi * f * t), deriv=1)[50:-50]

@@ -15,7 +15,7 @@ choice in motor rehab.
 
 **Why SPARC and not dimensionless jerk.** SPARC responds to *submovements* while being
 largely indifferent to small measurement noise, where a jerk-based metric differentiates
-three times and is swamped by it. On 30 Hz landmark data a naive derivative is mostly
+three times and is swamped by it. On landmark data at these rates a naive derivative is mostly
 noise, so that robustness is what makes any smoothness metric viable here at all.
 
 **But the robustness has a ceiling, and it bounds real use.** Measured against a
@@ -40,12 +40,14 @@ behavior rather than a defect, and it means the number separates *fluid from eff
 it does not count corrections. :func:`count_submovements` is what counts them.
 
 **Read SPARC only against itself.** The values here are **not** comparable to published
-SPARC figures. At a 30 Hz camera rate the Nyquist limit is 15 Hz, the ``fc=10`` cutoff
-sits close under it, and landmark noise fills the top of the band; on top of that the
-:mod:`motor_metrics.derive` chain attenuates fast movement by tens of percent. The
-absolute number is therefore a property of *this pipeline*, meaningful only as a
-within-child trend computed through identical constants. That is exactly why those
-constants are pinned rather than passed.
+SPARC figures. The band actually integrated is ``min(SPARC_FC, fs/2)`` — the grid's
+Nyquist limit wins whenever it is the lower of the two — and landmark noise fills the top
+of whatever that band turns out to be; on top of that the :mod:`motor_metrics.derive`
+chain attenuates fast movement by tens of percent. The absolute number is therefore a
+property of *this pipeline*, meaningful only as a within-child trend computed through
+identical constants. That is exactly why those constants are pinned rather than passed —
+and why a change to :data:`motor_metrics.derive.FS` moves every SPARC value ever
+computed onto a different scale, since it moves the band.
 
 **What the hip-centered frame can and cannot see.** ``sparc_trunk`` measures trunk
 reorientation, which is the principal degree of freedom of a sit<->prone transition, so
@@ -123,9 +125,22 @@ def sparc(speed, fs: float = FS, *, fc: float = SPARC_FC, amp_thresh: float = SP
     if peak == 0:
         return float("nan")
 
+    # There is no information above Nyquist, so a cutoff above it describes nothing. At
+    # ``fs=30`` this line is inert (``fc=10`` is well under 15) and the clamp only starts
+    # binding at grids below 20 Hz — which is precisely when it matters, and precisely when
+    # nobody would think to re-check a constant named for a frequency. Stated here rather
+    # than left to fall out of the ``rfftfreq`` axis, so the intent survives a refactor.
+    fc = min(fc, fs / 2.0)
+
+    # Real-input transform, so the spectrum is a *half* axis: 0 .. fs/2. A full ``fft``
+    # with an ``arange(0, fs, ...)`` axis works out identically whenever ``fc`` sits below
+    # Nyquist — the upper half is a mirror image, and it is discarded by the band mask
+    # before anything reads it. It stops working the moment ``fc`` does not: the arc would
+    # then traverse reflected copies of real content and count that noise twice. Taking the
+    # half axis makes the band physically meaningful at any ``fs`` rather than by luck.
     n_fft = int(2 ** (np.ceil(np.log2(v.size)) + SPARC_PAD_LEVEL))
-    freqs = np.arange(0, fs, fs / n_fft)
-    spectrum = np.abs(np.fft.fft(v, n_fft))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / fs)
+    spectrum = np.abs(np.fft.rfft(v, n_fft))
     spectrum = spectrum / spectrum.max()
 
     in_band = freqs <= fc

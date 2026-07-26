@@ -16,6 +16,7 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facedetector.FaceDetector
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
+import dev.remapy.metrics.Derive
 import dev.remapy.metrics.LiveMetrics
 import dev.remapy.metrics.LiveMetricsComputer
 import dev.remapy.metrics.PoseFrame
@@ -45,10 +46,18 @@ class RenderedFrame(
  *
  * Dropped frames are *fine* by construction, and that is not luck: `Derive.resampleUniform` puts
  * every signal on a uniform grid before differentiating, and `LiveWindow.windowSpan` selects the
- * window by **time rather than frame count**. Both were written for a jittery 30 Hz webcam and
- * both do exactly the right thing for a phone that occasionally drops to 22 fps. What they cannot
- * absorb is a *sustained* rate well under 30 Hz — see [RenderedFrame.fps], which is on screen for
- * that reason.
+ * window by **time rather than frame count**. Both were written for a jittery webcam and both do
+ * exactly the right thing for a phone that misses the occasional frame. What they cannot absorb is
+ * a *sustained* rate well under the grid — see [RenderedFrame.fps], which is on screen for that
+ * reason.
+ *
+ * **The analyzer decimates to `Derive.FS` itself.** The camera is left free-running and the drop
+ * happens here, in [analyze], rather than by asking the sensor for a slower capture. Capping the
+ * sensor was considered and rejected: a fixed 15 fps AE range doubles the maximum exposure from
+ * 33 ms to 67 ms, and these sessions happen across a room in indifferent lighting — precisely when
+ * AE takes the long exposure, and a 67 ms exposure smears a crawling child into landmarks no
+ * amount of downstream filtering repairs. Leaving the source at 30 also means a slow inference
+ * costs 33 ms of recovery rather than 67. The power saving was not worth the input quality.
  */
 class PosePipeline(
     context: Context,
@@ -65,6 +74,27 @@ class PosePipeline(
         private const val MIN_DETECTION_CONFIDENCE = 0.5f
         private const val MIN_PRESENCE_CONFIDENCE = 0.5f
         private const val MIN_TRACKING_CONFIDENCE = 0.5f
+
+        /**
+         * The rate frames are accepted at, taken from the kernel's grid rather than written down.
+         *
+         * Capping and the grid are the *same decision*: the point of running at 15 is that
+         * `Derive.resampleUniform` then neither interpolates up (manufacturing correlated samples)
+         * nor decimates down without an anti-alias filter. A second literal here would be the next
+         * thing to drift out of step with `Derive.FS`.
+         */
+        private val TARGET_FPS: Int = Derive.FS.toInt()
+        private val FRAME_PERIOD_MS: Long = (1000.0 / TARGET_FPS).toLong()
+
+        /**
+         * How early a frame may arrive and still be accepted, in ms.
+         *
+         * A source running at 30 fps delivers every ~33 ms with jitter, and a naive
+         * `sinceLast >= 67` test beats against that: an arrival at 66 ms is rejected, the next
+         * comes at 99, and the effective rate sags to ~14 fps with a 100 ms hole in it. A quarter
+         * of a 30 fps period is enough slack to take the 66 ms frame.
+         */
+        private const val PHASE_TOLERANCE_MS = 8L
     }
 
     /** Whether the pose model is running on the GPU delegate. Reported on screen. */
@@ -103,6 +133,25 @@ class PosePipeline(
     private var lastTimestampMs = -1L
     private var lastFrameAtMs = 0L
     private var smoothedFps = 0.0
+
+    /**
+     * When the next frame is due, as a phase accumulator rather than a "time since last".
+     *
+     * Advancing by `max(now, nextDueMs) + period` holds phase against a faster source while still
+     * re-phasing cleanly after a stall, instead of letting the accepted rate drift with whatever
+     * jitter the last accepted frame happened to carry.
+     */
+    private var nextDueMs = 0L
+
+    /**
+     * Last logged frame geometry, so the geometry log fires on change rather than per frame.
+     *
+     * This log *is* the check on `setOutputImageRotationEnabled`: it must read `rotationDegrees=0`
+     * in both orientations. A non-zero value means CameraX declined and every frame is taking the
+     * manual `createBitmap` path, which is the allocation pattern `BitmapRing` exists to avoid.
+     */
+    @Volatile
+    private var lastGeometry: String? = null
 
     /**
      * Set by [close]; stops frames being emitted after teardown.
@@ -156,7 +205,7 @@ class PosePipeline(
         } catch (e: RuntimeException) {
             // Not every device has a working GPU delegate, and a session that fails to start is
             // worse than one that runs slower. The fallback is worth *noticing*, though: it is a
-            // plausible cause of a device that cannot hold 30 fps.
+            // plausible cause of a device that cannot hold the target rate.
             Log.w(TAG, "GPU delegate unavailable, falling back to CPU", e)
             build(Delegate.CPU).also { usingGpu = false }
         }
@@ -167,6 +216,27 @@ class PosePipeline(
             image.close()
             return
         }
+        // Decimate to TARGET_FPS *before* any allocation, so a dropped frame costs one `close()`
+        // and nothing else — no `toBitmap`, no MPImage, no ring slot.
+        //
+        // This deliberately sits before the timestamp block below, and that placement is what
+        // keeps the metrics correct rather than merely cheap: `timestampMs` is only ever assigned
+        // for *accepted* frames, from the true wall clock, so the kernel sees a genuine ~15 Hz
+        // jittery timebase. `resampleUniform` and `windowSpan` were written for exactly that, so
+        // decimating needs no compensating change anywhere in `:metrics`. It looks like it should.
+        val nowMs = SystemClock.elapsedRealtime()
+        if (nowMs < nextDueMs - PHASE_TOLERANCE_MS) {
+            image.close()
+            return
+        }
+        nextDueMs = maxOf(nowMs, nextDueMs) + FRAME_PERIOD_MS
+
+        val geometry = "${image.width}x${image.height} rot=${image.imageInfo.rotationDegrees}"
+        if (geometry != lastGeometry) {
+            lastGeometry = geometry
+            Log.i(TAG, "frame geometry $geometry (rot must be 0; non-zero costs a copy per frame)")
+        }
+
         try {
             val source = image.toBitmap()
             val rotated = source.rotated(image.imageInfo.rotationDegrees)
@@ -290,6 +360,10 @@ class PosePipeline(
         computer = LiveMetricsComputer(mode)
         smoothedFps = 0.0
         lastFrameAtMs = 0L
+        // Re-phase the decimator too. A rebind can leave `nextDueMs` a whole period in the future,
+        // which would drop the first frame of the new camera for no reason and delay the first
+        // readout at exactly the moment the operator is looking for it.
+        nextDueMs = 0L
     }
 
     /**

@@ -11,14 +11,16 @@ import kotlin.math.ceil
  * property: there is exactly one implementation of the maths, so a live number and an offline
  * number cannot drift apart.
  *
- * **Cost is not the constraint.** Measured on the Python side against the 33 ms frame budget
- * that pose detection already dominates: a full recompute over a 5 s window is ~2.9 ms, over
- * 30 s ~10.9 ms. At [RECOMPUTE_EVERY] frames that is well under 1 % of the budget, so nothing
- * here needs an incremental algorithm and the window is simply recomputed whole. A phone is
- * slower than the laptop that was measured on, but not by the order of magnitude that would
- * change this conclusion — and if it ever is, `LiveWindowBudgetTest` is where it shows up.
+ * **Cost is not the constraint.** Measured on the Python side against the 67 ms frame budget
+ * that pose detection already dominates: a full recompute over a 5 s window is ~3 ms, over
+ * 30 s ~8 ms. At [RECOMPUTE_EVERY] frames that is a couple of percent of the budget, so nothing
+ * here needs an incremental algorithm and the window is simply recomputed whole. The margin got
+ * wider when the grid moved to 15 Hz — a window of a given duration holds half the samples and
+ * the budget doubled. A phone is slower than the laptop that was measured on, but not by the
+ * order of magnitude that would change this conclusion — and if it ever is,
+ * `LiveWindowBudgetTest` is where it shows up.
  *
- * **The constraint is that three samples at the end of any window are extrapolated.** See
+ * **The constraint is that the last [LIVE_LAG] samples of any window are extrapolated.** See
  * [LIVE_LAG].
  *
  * **What is deliberately absent**, carried over verbatim because each omission is a refusal
@@ -45,33 +47,39 @@ class LiveMetricsComputer(
         /**
          * Samples to read back from the end of a window for an instantaneous value.
          *
-         * **Not a tuning choice**: it is `Derive.windowLength() / 2`, the half-width of the
-         * Savitzky-Golay fit, and at exactly this lag the live value equals the offline one.
-         * The Savitzky-Golay interior fit needs three samples either side, so the last three
-         * of *any* window are fitted from one side only. Measured against the offline
+         * **Not a tuning choice, and deliberately computed rather than written down**: it is
+         * the half-width of the Savitzky-Golay fit, and at exactly this lag the live value
+         * equals the offline one. The interior fit needs two samples either side, so the last
+         * two of *any* window are fitted from one side only. Measured against the offline
          * whole-signal chain, as a function of how far back the value is read:
          *
          * ```
-         * lag 0 (edge)   position RMSE 0.00228 m   velocity RMSE 0.0757 m/s
-         * lag 1 ( 33 ms)               0.00110 m                 0.0474 m/s
-         * lag 2 ( 67 ms)               0.00105 m                 0.0246 m/s
-         * lag 3 (100 ms)               0.000000                  0.000000
+         * lag 0 (edge)   position RMSE 0.00223 m   velocity RMSE 0.0614 m/s
+         * lag 1 ( 67 ms)               0.00134 m                 0.0287 m/s
+         * lag 2 (133 ms)               0.000000                  0.000000
          * ```
          *
-         * The test signal's velocity sd was 0.0695 m/s, so **the edge-extrapolated derivative
-         * is essentially 100 % error**, while reading three samples back reproduces the offline
-         * value *exactly*. 100 ms is imperceptible as feedback and buys a number that is the
-         * same measurement the offline table reports. Do not "simplify" this to 0.
+         * The test signal's velocity sd was 0.0679 m/s, so **the edge-extrapolated derivative's
+         * error is 90 % of the signal's own spread** — essentially no information — while
+         * reading two samples back reproduces the offline value *exactly*. 133 ms is
+         * imperceptible as feedback and buys a number that is the same measurement the offline
+         * table reports. Do not "simplify" this to 0.
+         *
+         * This was a literal `3` until [Derive.FS] moved to 15 Hz, at which point it became a
+         * stale value that still compiled, still ran, and silently read twice as far into the
+         * past as it needed to. Deriving it is what stops that happening again — and it is why
+         * `ConstantsTest`'s half-width assertion is kept even though it now reads as a tautology.
          *
          * That lag governs the **instantaneous** readouts. The aggregates (sway RMS, mean
-         * velocity, cadence) average over the whole window, so the three edge samples are 3 of
-         * ~150 and dilute away; they are not trimmed, because trimming would only move the
+         * velocity, cadence) average over the whole window, so the two edge samples are 2 of
+         * ~75 and dilute away; they are not trimmed, because trimming would only move the
          * edge, not remove it.
          */
-        const val LIVE_LAG: Int = 3
+        @JvmStatic
+        val LIVE_LAG: Int = Derive.windowLength() / 2
 
         /**
-         * Recompute the expensive window metrics every N frames (~6 Hz at a 30 Hz camera).
+         * Recompute the expensive window metrics every N frames (~3 Hz at a 15 Hz camera).
          *
          * Cheap quality figures are refreshed on **every** frame regardless — they are what
          * tells the operator whether the framing is usable, and they must not lag the video.

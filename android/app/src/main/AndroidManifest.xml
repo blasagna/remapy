@@ -19,6 +19,17 @@
         android:label="remapy"
         android:supportsRtl="true"
         android:theme="@style/Theme.Remapy">
+        <!--
+          `screenOrientation` is the *initial* framing only; the overlay's toggle overrides it at
+          runtime via `requestedOrientation`. Landscape is the default because that is how the
+          tripod-mounted camera is used in the data-collection runbook.
+
+          `configChanges` is load-bearing rather than incidental: it stops the activity being
+          recreated on rotation, which would tear down and rebuild the MediaPipe tasks — the exact
+          native use-after-free that `PosePipeline.reset`'s doc describes. MainActivity overrides
+          `onConfigurationChanged` and rebinds CameraX itself instead. Do not remove one without
+          the other.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -13,19 +13,52 @@ import kotlin.test.assertTrue
  * failure would matter most: it is the reason a live instantaneous readout can be presented as
  * the *same measurement* the offline table reports, rather than a live approximation of it.
  *
- * Everything here follows from one fact — `Derive.windowLength()` is 7, so the interior fit
- * needs three samples either side and the last three of **any** window are fitted from one
- * side only. Reading three samples back steps off the extrapolated tail entirely.
+ * Everything here follows from one fact — the interior Savitzky-Golay fit needs
+ * `windowLength() / 2` samples either side, so that many at the end of **any** window are
+ * fitted from one side only. Reading that many samples back steps off the extrapolated tail
+ * entirely. Nothing here hardcodes the number; it follows [LiveMetricsComputer.LIVE_LAG].
  */
 class LiveLagIdentityTest {
 
     private val fs = Derive.FS
     private val lag = LiveMetricsComputer.LIVE_LAG
 
-    /** A sway-like signal: slow fundamental plus a little high-frequency landmark noise. */
+    /** A 5 s trailing window, in frames — the hold mode's window, derived rather than counted. */
+    private val WINDOW_FRAMES = (5.0 * fs).toInt()
+
+    /** Scales the unit-ish hash noise to a ~0.004 m sd, matching the Python measurement. */
+    private val NOISE_SD_SCALE = 0.004 / (1.0 / sqrt(12.0))
+
+    /**
+     * A sway-like signal: slow fundamental plus **broadband** landmark noise.
+     *
+     * The noise is broadband deliberately, and generated from a hash rather than an RNG so both
+     * languages can see the same character without sharing a generator. An earlier version used
+     * a single 5 Hz tone, and that was a poor stand-in for a specific reason: a Savitzky-Golay
+     * edge error is made almost entirely of the high-frequency content the fit is extrapolating,
+     * so with one tone the measured error is a function of where that tone happens to sit
+     * relative to the window rather than of the edge being unsafe to read. It did not bite at
+     * 30 Hz / 0.233 s (ratio 1.40). At 15 Hz / 0.333 s the wider window attenuates 5 Hz far
+     * enough that the ratio fell to 0.38 — and it would have fallen to 0.18 at the 7-sample
+     * alternative — while the identity at [LiveMetricsComputer.LIVE_LAG] stayed exactly zero
+     * throughout. Real landmark noise is broadband; `tests/test_live.py` uses
+     * `rng.normal(0, 0.004)` for this same measurement, and this reproduces that.
+     */
     private fun signal(n: Int): DoubleArray = DoubleArray(n) {
         val t = it / fs
-        0.03 * sin(2 * PI * 0.4 * t) + 0.002 * sin(2 * PI * 5.0 * t + 0.7)
+        0.03 * sin(2 * PI * 0.4 * t) + NOISE_SD_SCALE * whiteNoise(it)
+    }
+
+    /**
+     * Deterministic white noise in `[-0.5, 0.5)`. A hash, not a PRNG: it needs to be
+     * reproducible and flat across the band, and it does not need to be good.
+     */
+    private fun whiteNoise(i: Int): Double {
+        var h = i * 374761393 + 668265263
+        h = h xor (h ushr 13)
+        h *= 1274126177
+        h = h xor (h ushr 16)
+        return (h and 0xFFFF) / 65536.0 - 0.5
     }
 
     /**
@@ -39,7 +72,7 @@ class LiveLagIdentityTest {
         val offline = Derive.smooth(x)
 
         for (end in 200..n step 17) {
-            val windowStart = end - 150 // a 5 s window at 30 Hz
+            val windowStart = end - WINDOW_FRAMES
             val live = Derive.smooth(x.sliceArray(windowStart until end))
             val liveValue = live[live.size - 1 - lag]
             val offlineValue = offline[end - 1 - lag]
@@ -55,7 +88,7 @@ class LiveLagIdentityTest {
         val offline = Derive.smooth(x, deriv = 1)
 
         for (end in 200..n step 17) {
-            val live = Derive.smooth(x.sliceArray(end - 150 until end), deriv = 1)
+            val live = Derive.smooth(x.sliceArray(end - WINDOW_FRAMES until end), deriv = 1)
             assertClose(offline[end - 1 - lag], live[live.size - 1 - lag], 1e-12, "velocity at end=$end")
         }
     }
@@ -64,9 +97,10 @@ class LiveLagIdentityTest {
      * **The other half, and the reason nobody may "simplify" the lag to zero.**
      *
      * At the window edge the Savitzky-Golay fit is one-sided and the derivative it extrapolates
-     * is essentially all error — the Python docstring measures RMSE 0.0757 m/s against a signal
-     * whose own velocity sd was 0.0695 m/s. This asserts the shape of that result: the edge
-     * error is a large fraction of the signal's own variation, while the lag-3 error is zero.
+     * is essentially all error — the Python docstring measures RMSE 0.0614 m/s against a signal
+     * whose own velocity sd was 0.0679 m/s. This asserts the shape of that result: the edge
+     * error is a large fraction of the signal's own variation, while the error at
+     * [LiveMetricsComputer.LIVE_LAG] is zero.
      */
     @Test
     fun `the edge-extrapolated derivative is essentially all error`() {
@@ -77,7 +111,7 @@ class LiveLagIdentityTest {
         val edgeErrors = ArrayList<Double>()
         val laggedErrors = ArrayList<Double>()
         for (end in 200..n step 3) {
-            val live = Derive.smooth(x.sliceArray(end - 150 until end), deriv = 1)
+            val live = Derive.smooth(x.sliceArray(end - WINDOW_FRAMES until end), deriv = 1)
             edgeErrors.add(live[live.size - 1] - offline[end - 1])
             laggedErrors.add(live[live.size - 1 - lag] - offline[end - 1 - lag])
         }
@@ -103,7 +137,7 @@ class LiveLagIdentityTest {
         for (shorterLag in 0 until lag) {
             var worst = 0.0
             for (end in 200..n step 17) {
-                val live = Derive.smooth(x.sliceArray(end - 150 until end), deriv = 1)
+                val live = Derive.smooth(x.sliceArray(end - WINDOW_FRAMES until end), deriv = 1)
                 val delta = kotlin.math.abs(
                     live[live.size - 1 - shorterLag] - offline[end - 1 - shorterLag]
                 )

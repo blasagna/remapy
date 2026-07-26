@@ -9,9 +9,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,12 +29,22 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.remapy.metrics.Derive
 import dev.remapy.metrics.Landmarks
 import dev.remapy.metrics.LiveMetrics
 import dev.remapy.metrics.PoseFrame
 
 /** Landmarks below this are drawn dimmed — they are extrapolated, not measured. */
 private const val MIN_VISIBILITY = 0.5f
+
+/**
+ * Fraction of `Derive.FS` at which the fps readout stays green.
+ *
+ * Some slack is needed because the displayed rate is an EMA of *delivered* frames and a decimator
+ * targeting the grid exactly will always sit a shade under it. Enough slack to not cry wolf, not
+ * so much that a genuinely struggling device reads healthy.
+ */
+private const val FPS_OK_FRACTION = 0.9
 
 /**
  * The live view: the redacted camera frame, the skeleton, and the metrics readout.
@@ -51,63 +64,91 @@ fun CameraScreen(
     onFlipCamera: () -> Unit,
     mode: String,
     onToggleMode: () -> Unit,
+    portrait: Boolean,
+    onToggleOrientation: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        // Drawn before the early return so the controls stay reachable while the camera is
-        // starting up — including right after a flip or a mode change, when the window is empty
-        // and there is briefly no frame yet.
-        Column(
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OverlayButton(
-                // The exercise being watched, and the thing that changes what every row below
-                // means. Named rather than iconified for that reason.
-                label = mode,
-                glyph = "⇄",
-                onClick = onToggleMode,
-            )
-            if (canFlipCamera) {
-                OverlayButton(
-                    label = if (lensFacing == CameraSelector.LENS_FACING_FRONT) "front" else "rear",
-                    glyph = "⟲",
-                    onClick = onFlipCamera,
+        // The video is **full-bleed on purpose**, drawn before and underneath the chrome layer.
+        // Insetting it would shrink the image on every device with a cutout in order to protect
+        // what is mostly letterbox bar; a punch hole sitting over part of the camera image costs
+        // the operator nothing, while a punch hole over the `coverage` row costs them the one
+        // number that says whether to trust the rest.
+        if (bitmap != null) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val scale = minOf(size.width / bitmap.width, size.height / bitmap.height)
+                val drawnW = bitmap.width * scale
+                val drawnH = bitmap.height * scale
+                val originX = (size.width - drawnW) / 2f
+                val originY = (size.height - drawnH) / 2f
+
+                drawImage(
+                    image = bitmap.asImageBitmap(),
+                    dstOffset = androidx.compose.ui.unit.IntOffset(originX.toInt(), originY.toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize(drawnW.toInt(), drawnH.toInt()),
                 )
+                if (frame != null) drawSkeleton(frame, originX, originY, drawnW, drawnH)
             }
         }
 
-        if (bitmap == null) {
-            Text(
-                "waiting for camera...",
-                color = Color.Gray,
-                modifier = Modifier.align(Alignment.Center),
-            )
-            return@Box
+        // Everything readable sits inside the safe area. One `windowInsetsPadding` on the layer
+        // rather than on each aligned child: on a wrap-content node anchored to a corner, the
+        // far-edge insets would inflate the node for nothing.
+        //
+        // `safeDrawing` is already the union of system bars, display cutout and IME. Assembling
+        // `displayCutout.union(statusBars)` by hand would mean re-deriving it — wrongly — later.
+        // Known cost: in landscape the cutout inset applies to the *whole* edge even though the
+        // hole occupies a third of it, so ~30 dp of overlay width goes unused. Accepted; the
+        // alternative is per-cutout-bounds geometry for a problem that does not warrant it.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+        ) {
+            // Drawn before the early return so the controls stay reachable while the camera is
+            // starting up — including right after a flip, a rotation or a mode change, when the
+            // window is empty and there is briefly no frame yet.
+            Column(
+                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OverlayButton(
+                    // The exercise being watched, and the thing that changes what every row below
+                    // means. Named rather than iconified for that reason.
+                    label = mode,
+                    glyph = "⇄",
+                    onClick = onToggleMode,
+                )
+                if (canFlipCamera) {
+                    OverlayButton(
+                        label = if (lensFacing == CameraSelector.LENS_FACING_FRONT) "front" else "rear",
+                        glyph = "⟲",
+                        onClick = onFlipCamera,
+                    )
+                }
+                OverlayButton(
+                    label = if (portrait) "portrait" else "landscape",
+                    glyph = "▯",
+                    onClick = onToggleOrientation,
+                )
+            }
+
+            if (bitmap == null) {
+                Text(
+                    "waiting for camera...",
+                    color = Color.Gray,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            } else {
+                MetricsPanel(
+                    metrics = metrics,
+                    fps = fps,
+                    usingGpu = usingGpu,
+                    modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+                )
+            }
         }
-
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val scale = minOf(size.width / bitmap.width, size.height / bitmap.height)
-            val drawnW = bitmap.width * scale
-            val drawnH = bitmap.height * scale
-            val originX = (size.width - drawnW) / 2f
-            val originY = (size.height - drawnH) / 2f
-
-            drawImage(
-                image = bitmap.asImageBitmap(),
-                dstOffset = androidx.compose.ui.unit.IntOffset(originX.toInt(), originY.toInt()),
-                dstSize = androidx.compose.ui.unit.IntSize(drawnW.toInt(), drawnH.toInt()),
-            )
-            if (frame != null) drawSkeleton(frame, originX, originY, drawnW, drawnH)
-        }
-
-        MetricsPanel(
-            metrics = metrics,
-            fps = fps,
-            usingGpu = usingGpu,
-            modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
-        )
     }
 }
 
@@ -160,8 +201,8 @@ private fun DrawScope.drawSkeleton(
  *
  * Top-right keeps it well clear of the metrics panel in the top-left. Sized generously because it
  * gets pressed one-handed while the other hand is steadying a child, and each shows its **current
- * state as a word** rather than a bare glyph — the operator needs to know which camera and which
- * exercise are live without studying the image to infer it.
+ * state as a word** rather than a bare glyph — the operator needs to know which camera, which
+ * exercise and which framing are live without studying the image to infer it.
  */
 @Composable
 private fun OverlayButton(
@@ -215,13 +256,15 @@ private fun MetricsPanel(
         // measurement — and on a hand-held phone it is the caveat most likely to bite.
         MetricRow("up", metrics.liveUpSource, Overlay.WARN_COLOR)
 
-        // Sustained frame rate: the number that says whether the 30 Hz filter chain is being fed
-        // what it assumes. Red below 25, where resampling up to the grid starts inventing
-        // correlated samples.
+        // Sustained frame rate: the number that says whether the filter chain is being fed what it
+        // assumes. The threshold is derived from the grid, not written down — below it, resampling
+        // *up* to the grid starts inventing correlated samples and the documented derivative-gain
+        // table stops describing the filter. The pipeline decimates *to* `Derive.FS`, so a healthy
+        // reading sits at the grid rate rather than above it.
         MetricRow(
             "fps",
             "%.0f  %s".format(fps, if (usingGpu) "gpu" else "cpu"),
-            if (fps >= 25.0) Overlay.OK_COLOR else Overlay.BAD_COLOR,
+            if (fps >= FPS_OK_FRACTION * Derive.FS) Overlay.OK_COLOR else Overlay.BAD_COLOR,
         )
 
         Overlay.sitSteadiness(metrics)?.let { SteadinessMeter(it) }

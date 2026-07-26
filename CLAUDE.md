@@ -47,8 +47,13 @@ Repo-wide rules that apply across packages (package-specific rules live in each 
   `recording`/`rerun_viewer` always redact before persisting.
 - **Empty `__init__.py` — import from submodules, not the package root** (e.g.
   `from video_capture.capture import VideoCapture`). The `__init__.py` files are intentionally empty.
-- **All capture CLIs request 1280×720 by default** (`--width`/`--height` override; the device picks
-  the nearest supported mode).
+- **All capture CLIs request 1280×720 at `derive.FS` by default** (`--width`/`--height`/`--fps`
+  override; the device picks the nearest supported mode). The rate default is deliberately the
+  *metrics grid*, not a camera-native 30: `resample_uniform` interpolates linearly with **no
+  anti-alias filter**, so capturing above the grid folds landmark noise from above its Nyquist
+  down into the measurement band and straight onto `sway_rms_m`, silently. `CAP_PROP_FPS` is
+  advisory and many webcams ignore it, so `VideoCapture.fps_warning()` reports the mismatch rather
+  than letting it pass unseen.
 - **MediaPipe is the Tasks-API-only build** (0.10.35, Python 3.14): `mp.solutions.*` and
   `mediapipe.framework` are absent — use the `mediapipe.tasks.python.vision` classes; skeletons are
   drawn manually with OpenCV. Detail in `pose_estimation/` and `face_blur/`.

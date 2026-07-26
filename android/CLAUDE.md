@@ -8,7 +8,8 @@ exactly one artifact: `metrics/src/test/resources/goldens.json`.
 ## Status
 
 - `metrics/` — **done and verified.** The whole live kernel in Kotlin, 83 tests green against
-  Python goldens at 1e-9.
+  Python goldens at 1e-9, on the **15 Hz** chain (`FS = 15.0`, `WINDOW_S = 0.35`, 5-sample window,
+  `LIVE_LAG = 2` — derived from the window, not written down).
 - `app/` — **builds and runs.** CameraX + MediaPipe Tasks LIVE_STREAM + Compose overlay + face
   redaction. Verified on an emulator: launches, loads both models from assets, delivers ~25 fps,
   renders the overlay, and blanks correctly when no pose is present. **Never yet run against a
@@ -105,7 +106,7 @@ Things worth knowing before editing:
   eventually" would be an OOM kill partway through a trial.
 - GPU delegate with **CPU fallback**, which is exercised: the emulator has no OpenCL and falls back
   cleanly. The delegate in use is on screen next to the frame rate, because it is a plausible cause
-  of a device that cannot hold 30 fps.
+  of a device that cannot hold the target rate.
 - **The rear/front toggle must never mirror the front camera.** A selfie preview flips horizontally
   to look natural, and that flip would swap the child's left and right *as MediaPipe sees them* —
   which silently inverts the sign of `live_leg_amplitude_symmetry`, the "which leg does he favour"
@@ -124,9 +125,46 @@ Things worth knowing before editing:
   built **once for the life of the activity**, and a flip only rebinds CameraX and swaps the
   `LiveMetricsComputer`. Anything that feels like it wants to tear down and rebuild the detector
   should be re-examined against this.
-- **Two overlay controls, top-right**: exercise mode (`hold`/`crawl`) and lens (`rear`/`front`).
-  Both show their current state as a word rather than a glyph, because the operator has to know
-  which is live without inferring it from the image. Switching mode discards the rolling window —
+- **The analyzer decimates to `Derive.FS`; the sensor is left free-running.** A phase accumulator
+  in `PosePipeline.analyze` (`nextDueMs = max(now, nextDueMs) + period`) drops frames *before*
+  `toBitmap()`, so a rejected frame costs one `close()`. A naive `sinceLast >= 67` test would beat
+  against a jittery 30 fps source and sag to ~14 fps with a 100 ms hole in it. It sits **before**
+  the timestamp block on purpose: `timestampMs` is assigned only for accepted frames, from the true
+  wall clock, so the kernel sees a genuine 15 Hz jittery timebase and needs **no compensating
+  change at all** — `resampleUniform` and `windowSpan` were written for exactly this. Capping the
+  sensor instead (`SessionConfig.setFrameRateRange`) was rejected: it doubles the AE exposure
+  ceiling to 67 ms in the poor light these sessions actually happen in, and a smeared crawling
+  child is a worse input than a slightly warmer phone.
+- **Portrait/landscape is an explicit toggle, and rotation must not cost an allocation.**
+  `setOutputImageRotationEnabled(true)` makes CameraX rotate inside its own reused `ImageReader`,
+  so the delivered frame is upright and `rotationDegrees` stays 0 — which keeps
+  `PosePipeline.rotated()` on its zero-copy path. Without it, portrait would do a full
+  `createBitmap` per frame: a second ~3.7 MB allocation that `BitmapRing` does *not* serve, on a
+  device already rate-limited. `PosePipeline` logs the frame geometry on change for exactly this
+  reason — **it must read `rot=0` in both orientations**, and a non-zero value means the fallback
+  path is live. `ImageProcessingOptions.setRotationDegrees` was rejected again for the reason the
+  existing docstring gives: it would leave the display bitmap in the sensor frame while landmarks
+  came back rotated, putting a hand-written inverse transform between the pose and `FaceRedaction`.
+  The toggle drives `requestedOrientation` (the *window* must go tall for Compose), and
+  `onConfigurationChanged` rebinds — the manifest's `configChanges` is what stops the activity
+  being recreated and the MediaPipe tasks torn down. Rotation calls `reset()` for a stronger reason
+  than a lens flip: it changes the camera's relation to gravity, so `WORLD_UP` and every
+  `live_trunk_angle_*` shift discontinuously, and a window spanning that would average across a
+  change that has nothing to do with the child. The resolution request is transposed in portrait,
+  since `ResolutionStrategy`'s bound size is read in the target-rotation frame.
+- **The overlay is inset by `WindowInsets.safeDrawing`; the video is not.** At `targetSdk = 37`
+  edge-to-edge is enforced, and a punch-hole selfie camera sits top-centre in portrait. The chrome
+  lives in its own layer with one `windowInsetsPadding`, while the letterboxed video stays
+  full-bleed underneath: a cutout over part of the image costs nothing, a cutout over the
+  `coverage` row costs the reader the number that says whether to trust the rest. `safeDrawing` is
+  used rather than a hand-assembled `displayCutout.union(statusBars)` because it is already that
+  union and cannot be re-derived wrongly later. Known cost: in landscape the cutout inset spans the
+  whole edge, so ~30 dp of overlay width goes unused.
+- **Three overlay controls, top-right**: exercise mode (`hold`/`crawl`), lens (`rear`/`front`) and
+  framing (`landscape`/`portrait`).
+  All three show their current state as a word rather than a glyph, because the operator has to
+  know which is live without inferring it from the image. Switching mode discards the rolling
+  window —
   unavoidably, since the two modes use different window lengths (5 s vs 6 s, a crawl needing
   several pull cycles before its period CV means anything) — so the readout blanks and re-warms.
 - `Overlay` ports `live_draw.py` — same row order, same `--` for NaN, same colour semantics
@@ -202,8 +240,10 @@ identical model bytes.
 **What to check on the first real run**, since these are the open risks and the overlay is where
 they surface:
 
-- **`fps`** — green at ≥ 25. Below that the 30 Hz filter chain is resampling *up* and inventing
-  correlated samples. The `gpu`/`cpu` label beside it is the first thing to suspect if it is low.
+- **`fps`** — green at ≥ 13.5, which is `0.9 * Derive.FS` rather than a written-down number. The
+  analyzer decimates *to* 15, so a healthy reading sits at 15 and never above it; below the
+  threshold the chain is resampling *up* and inventing correlated samples. The `gpu`/`cpu` label
+  beside it is the first thing to suspect if it is low.
 - **`coverage`** — green means the torso landmarks are trusted. Persistent red means framing or
   lighting, not a bug; the metrics are supposed to blank rather than guess.
 - **`up world_y`** — a reminder that the vertical assumes a level camera. It is why the hold readout
@@ -211,8 +251,8 @@ they surface:
 - **The face redaction.** Confirm a face is actually covered before pointing this at anyone. If the
   whole frame goes black, no face was located and `blankWhenUnlocated` did its job.
 
-Nothing is recorded — no storage permission, no files written, no network. The screen stays on and
-the app is landscape-locked.
+Nothing is recorded — no storage permission, no files written, no network. The screen stays on,
+and the framing is landscape by default with a portrait toggle in the overlay.
 
 ### Running it without a device
 
@@ -250,11 +290,13 @@ treat a capture-device change as a new baseline.
 
 ## Other open risks
 
-- **Sustained frame rate on a real device is unmeasured.** `derive.FS` is 30.0. The chain absorbs
-  jitter and dropped frames by design, but a device sustaining well under ~25 fps resamples *up* to
-  the grid and starts manufacturing correlated samples, at which point the documented
-  derivative-gain table no longer describes the filter. The rate and delegate are on screen for
-  exactly this; the emulator's 25 fps under swiftshader says nothing about a phone.
+- **Sustained frame rate — measured once, at 15-20 fps on a Pixel 10, and addressed.** The device
+  could not hold 30, so the grid moved to it rather than the other way round: `derive.FS` is now
+  **15.0** in both languages, and `PosePipeline` decimates to exactly that instead of letting the
+  rate wander. Capping the *sensor* was rejected — a fixed 15 fps AE range doubles the exposure
+  ceiling to 67 ms, and these sessions happen across a room in poor light, which is exactly when
+  AE takes the long exposure and smears a crawling child. What is still unverified is whether the
+  phone holds 15 *sustained* over a whole session; the rate and delegate remain on screen for that.
 - **Pose quality has never been observed.** No run has yet put a person in front of the camera.
 - **Crawl mode has never been exercised against a real crawl.** The toggle works and the kernel is
   verified, but no camera has yet seen the thing it measures.

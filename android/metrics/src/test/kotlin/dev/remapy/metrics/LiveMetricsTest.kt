@@ -186,7 +186,7 @@ class LiveMetricsTest {
      */
     @Test
     fun `a full push sequence stays far inside the frame budget`() {
-        val n = 900 // 30 s at 30 Hz
+        val n = (30 * Derive.FS).toInt() // 30 s at the shipped grid
         val frames = Bodies.frames(Bodies.swayingTrunk(n, 0.03, 0.4))
         val poses = (0 until n).map {
             PoseFrame(frames.worldRow(it), frames.normRow(it), FloatArray(33) { 1f }, FloatArray(33) { 1f })
@@ -201,6 +201,9 @@ class LiveMetricsTest {
         for (i in 0 until n) fresh.push(frames.timestampMs(i), poses[i])
         val perPushMs = (System.nanoTime() - startNs) / 1e6 / n
 
-        assertTrue(perPushMs < 5.0, "mean push took ${perPushMs} ms, well over the 33 ms frame budget's share")
+        assertTrue(
+            perPushMs < 5.0,
+            "mean push took ${perPushMs} ms, well over the ${1000 / Derive.FS} ms frame budget's share",
+        )
     }
 }

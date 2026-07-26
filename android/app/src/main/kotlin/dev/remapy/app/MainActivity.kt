@@ -1,13 +1,17 @@
 package dev.remapy.app
 
 import android.Manifest
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
+import android.util.Size
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -28,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import dev.remapy.metrics.LiveMetrics
 import dev.remapy.metrics.LiveMetricsComputer
 import dev.remapy.metrics.PoseFrame
@@ -41,8 +47,9 @@ import java.util.concurrent.Executors
  * — he never looks at this screen. Nothing is persisted; the desktop pipeline stays canonical for
  * recordings, annotations and the cross-session trend.
  *
- * Landscape-locked and screen-on, matching how the tripod-mounted camera is used in the
- * data-collection runbook.
+ * Screen-on, and landscape by default, matching how the tripod-mounted camera is used in the
+ * data-collection runbook — but the framing is switchable at runtime via the overlay's
+ * orientation toggle, since a standing or crawling child frames better vertically.
  */
 class MainActivity : ComponentActivity() {
 
@@ -72,6 +79,15 @@ class MainActivity : ComponentActivity() {
     /** Whether the *other* lens exists. Tablets and some phones have only one. */
     private var canFlipCamera by mutableStateOf(false)
 
+    /**
+     * Whether the view is framed vertically. Driven by the toggle, never by the sensor.
+     *
+     * A tripod-mounted phone must not reframe itself because someone picked it up, and every
+     * orientation change throws away the rolling window (see [rebindForOrientation]) — so this is
+     * a deliberate act, taken between trials, and the button shows which state is live.
+     */
+    private var portrait by mutableStateOf(false)
+
     private var cameraProvider: ProcessCameraProvider? = null
 
     private val requestCamera = registerForActivityResult(
@@ -84,6 +100,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Draw behind the system bars and then hide them. The `Fullscreen` platform theme in
+        // `themes.xml` no longer does anything on modern API levels, and at `targetSdk = 37`
+        // edge-to-edge is enforced regardless — so this is what actually reclaims the status-bar
+        // strip for the camera image. It does *not* weaken the cutout handling in `CameraScreen`:
+        // `WindowInsets.displayCutout` reports the punch hole whether or not the bars are visible.
+        enableEdgeToEdge()
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+
         analysisExecutor = Executors.newSingleThreadExecutor()
 
         hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
@@ -103,6 +132,8 @@ class MainActivity : ComponentActivity() {
                         onFlipCamera = ::flipCamera,
                         mode = liveMode,
                         onToggleMode = ::toggleMode,
+                        portrait = portrait,
+                        onToggleOrientation = ::toggleOrientation,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -134,6 +165,58 @@ class MainActivity : ComponentActivity() {
         }
         // Blank the view immediately rather than leaving the last frame of the previous camera on
         // screen while the new one warms up — a stale image with live-looking chrome around it.
+        bitmap = null
+        frame = null
+        metrics = null
+        fps = 0.0
+        pipeline?.reset()
+        startCamera()
+    }
+
+    /**
+     * Switch between landscape and portrait framing.
+     *
+     * Driven through [setRequestedOrientation] rather than `ImageAnalysis.setTargetRotation`,
+     * because the *window* has to become tall for Compose to lay the overlay out vertically;
+     * target rotation alone would rotate the analysis buffer and leave the UI sideways.
+     *
+     * The activity declares `configChanges="orientation|screenSize"`, so it is **not** recreated
+     * here — [onConfigurationChanged] fires instead and rebinds. When the window is already in the
+     * requested orientation that callback never comes at all, so rebind directly.
+     */
+    private fun toggleOrientation() {
+        portrait = !portrait
+        val alreadyThere =
+            (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) == portrait
+        requestedOrientation = if (portrait) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        if (alreadyThere) rebindForOrientation()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        rebindForOrientation()
+    }
+
+    /**
+     * Rebind CameraX for the current orientation, discarding the rolling window.
+     *
+     * The same shape as [flipCamera], and the discard is **less** optional here, not more. Rotating
+     * the phone changes the camera's relation to gravity, so `WORLD_UP`'s level-camera assumption
+     * and every `live_trunk_angle_*` value shift discontinuously at the moment of the flip. A
+     * window spanning that would average a trunk angle across a change that has nothing to do with
+     * the child — the same refusal `longest_run` makes about bridging a dropout.
+     *
+     * Rebinding is also what keeps the analysis buffer upright without any explicit rotation call:
+     * a freshly built `ImageAnalysis` picks up the current display rotation as its target, which is
+     * exactly what `configChanges` swallowing the recreation would otherwise have cost us.
+     *
+     * The MediaPipe tasks are **kept**, for the reason [flipCamera] documents.
+     */
+    private fun rebindForOrientation() {
         bitmap = null
         frame = null
         metrics = null
@@ -193,12 +276,21 @@ class MainActivity : ComponentActivity() {
                 pipeline = pipe
                 usingGpu = pipe.usingGpu
 
+                // The bound size is expressed in the *target rotation's* coordinate frame, so a
+                // portrait target rotation reads `Size(1280, 720)` as 1280 tall. Swapping it asks
+                // for the same sensor mode in both orientations, delivered 720x1280 in portrait.
+                val target = if (portrait) {
+                    Size(TARGET_HEIGHT, TARGET_WIDTH)
+                } else {
+                    Size(TARGET_WIDTH, TARGET_HEIGHT)
+                }
+
                 val analysis = ImageAnalysis.Builder()
                     .setResolutionSelector(
                         ResolutionSelector.Builder()
                             .setResolutionStrategy(
                                 ResolutionStrategy(
-                                    android.util.Size(TARGET_WIDTH, TARGET_HEIGHT),
+                                    target,
                                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
                                 )
                             )
@@ -209,6 +301,17 @@ class MainActivity : ComponentActivity() {
                     // and the metric chain is built for a jittery timebase anyway.
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    // Let CameraX rotate the buffer inside its own reused ImageReader, so the
+                    // delivered frame is already upright and `rotationDegrees` stays 0.
+                    //
+                    // This is a memory decision, not a convenience. `PosePipeline.rotated()` only
+                    // hits its zero-copy fast path at 0 degrees; in portrait it would otherwise do
+                    // a full `createBitmap` per frame — a second ~3.7 MB allocation that
+                    // `BitmapRing` does *not* serve, on top of the one `toBitmap()` already makes.
+                    // `BitmapRing`'s own docs record the GC losing that race at ~100 MB/s. The
+                    // manual rotation stays in place as a correctness backstop for any device
+                    // where this silently declines.
+                    .setOutputImageRotationEnabled(true)
                     .build()
                 analysis.setAnalyzer(analysisExecutor, pipe)
 
