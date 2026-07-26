@@ -10,11 +10,13 @@ exactly one artifact: `metrics/src/test/resources/goldens.json`.
 - `metrics/` — **done and verified.** The whole live kernel in Kotlin, 83 tests green against
   Python goldens at 1e-9, on the **15 Hz** chain (`FS = 15.0`, `WINDOW_S = 0.35`, 5-sample window,
   `LIVE_LAG = 2` — derived from the window, not written down).
-- `app/` — **builds and runs.** CameraX + MediaPipe Tasks LIVE_STREAM + Compose overlay + face
-  redaction. Verified on an emulator: launches, loads both models from assets, delivers ~25 fps,
-  renders the overlay, and blanks correctly when no pose is present. **Never yet run against a
-  real child or a real camera**, so nothing about pose quality or on-device frame rate is
-  established — see *Open risks*.
+- `app/` — **works on a real device.** CameraX + MediaPipe Tasks LIVE_STREAM + Compose overlay +
+  face redaction. Verified on a **Pixel 10** (Android 17, arm64-v8a): launches, loads both models
+  from assets, holds a sustained 15 fps, renders the overlay clear of the punch-hole camera, tracks
+  a real person, and both toggles (lens, framing) and both exercise modes behave — crawl included,
+  against an actual crawl. The one thing a working app does **not** establish is *landmark parity*
+  with the desktop build; that is still open and still needs measuring, see *Open risk: landmark
+  parity*.
 
 ## Why a Kotlin rewrite and not Chaquopy
 
@@ -237,8 +239,10 @@ The first build needs network for `fetchModels`, unless the Python model caches 
 populated — in which case it copies from them, which is also what keeps phone and laptop on
 identical model bytes.
 
-**What to check on the first real run**, since these are the open risks and the overlay is where
-they surface:
+**What to check at the start of every session.** This was the first-run checklist; the first run has
+happened and passed on a Pixel 10, but none of these are one-time facts — `fps` moves with thermals,
+`coverage` and the redaction move with framing and lighting, and the vertical moves with wherever
+the phone was propped. The overlay is where each of them surfaces:
 
 - **`fps`** — green at ≥ 13.5, which is `0.9 * Derive.FS` rather than a written-down number. The
   analyzer decimates *to* 15, so a healthy reading sits at 15 and never above it; below the
@@ -249,7 +253,8 @@ they surface:
 - **`up world_y`** — a reminder that the vertical assumes a level camera. It is why the hold readout
   leads with `trunk dev` (deviation from the window's own baseline) rather than an absolute lean.
 - **The face redaction.** Confirm a face is actually covered before pointing this at anyone. If the
-  whole frame goes black, no face was located and `blankWhenUnlocated` did its job.
+  whole frame goes black, no face was located and `blankWhenUnlocated` did its job. Worth re-checking
+  after a lens or framing change specifically, since both alter what the detector is looking at.
 
 Nothing is recorded — no storage permission, no files written, no network. The screen stays on,
 and the framing is landscape by default with a portrait toggle in the overlay.
@@ -288,15 +293,31 @@ that mp4 through the app (needs a file-source screen — **not yet built**), and
 is the figure that actually decides whether phone and laptop sessions can share a trend. Until then,
 treat a capture-device change as a new baseline.
 
+## Closed risks, and what closed them
+
+Kept rather than deleted: each of these shaped a design decision that still stands, and the
+reasoning is only legible next to the risk it answers.
+
+- **Sustained frame rate — was unmeasured, now measured and held.** The Pixel 10 delivered 15-20
+  fps, not the 30 `derive.FS` assumed, so the grid moved to the hardware rather than the other way
+  round: `derive.FS` is **15.0** in both languages and `PosePipeline` decimates to exactly that
+  instead of letting the rate wander. Capping the *sensor* was rejected — a fixed 15 fps AE range
+  doubles the exposure ceiling to 67 ms, and these sessions happen across a room in poor light,
+  exactly when AE takes the long exposure and smears a crawling child. A sustained 15 was then
+  confirmed on the device. The rate and delegate stay on screen: this closed on *one* phone, and a
+  slower or thermally-throttled one is still a different question.
+- **Pose quality — observed.** A real person in frame tracks sensibly. This had been open since the
+  port was written.
+- **Crawl mode — exercised against a real crawl.** The mode the `leg_*` fields exist for has now
+  seen the thing it measures.
+
 ## Other open risks
 
-- **Sustained frame rate — measured once, at 15-20 fps on a Pixel 10, and addressed.** The device
-  could not hold 30, so the grid moved to it rather than the other way round: `derive.FS` is now
-  **15.0** in both languages, and `PosePipeline` decimates to exactly that instead of letting the
-  rate wander. Capping the *sensor* was rejected — a fixed 15 fps AE range doubles the exposure
-  ceiling to 67 ms, and these sessions happen across a room in poor light, which is exactly when
-  AE takes the long exposure and smears a crawling child. What is still unverified is whether the
-  phone holds 15 *sustained* over a whole session; the rate and delegate remain on screen for that.
-- **Pose quality has never been observed.** No run has yet put a person in front of the camera.
-- **Crawl mode has never been exercised against a real crawl.** The toggle works and the kernel is
-  verified, but no camera has yet seen the thing it measures.
+- **Landmark parity is still the one that matters, and "it works" does not touch it.** A tracking
+  skeleton that looks right on screen says nothing about whether Android's GPU delegate emits the
+  *same* `pose_world_landmarks` as the desktop CPU build on the same frames. That is a numeric
+  comparison, not a visual one — see the section above for how to run it. Until it is run, phone
+  and laptop sessions are separate baselines and must not be pooled into one trend.
+- **Every metric moved scale when the grid did.** Recoverable, since metrics are derived on read:
+  re-running `pixi run metrics` regenerates past sessions on the 15 Hz chain. Figures already
+  written down elsewhere are not.

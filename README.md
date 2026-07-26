@@ -163,9 +163,10 @@ the SDK's `adb`. Its rule carries `TAG+="uaccess"`, so on a systemd desktop you 
 join the `plugdev` group, despite what most guides say. Many setups need none of this; check
 before fixing.
 
-### What to look at on a first real run
+### What to look at at the start of a session
 
-The overlay shows the things that are still unproven:
+The app has been run on a real device against a real person, in both hold and crawl modes. These
+are not one-time checks though — the overlay shows the things that move between sessions:
 
 - **`fps`** — green at ≥ 13.5 (90 % of the 15 Hz grid). Below that the filter chain is resampling
   *up* and inventing correlated samples. The `gpu`/`cpu` label beside it is the first thing to
