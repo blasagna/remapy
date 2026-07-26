@@ -21,8 +21,16 @@
         android:theme="@style/Theme.Remapy">
         <!--
           `screenOrientation` is the *initial* framing only; the overlay's toggle overrides it at
-          runtime via `requestedOrientation`. Landscape is the default because that is how the
-          tripod-mounted camera is used in the data-collection runbook.
+          runtime via `requestedOrientation`. Portrait is the default: it is the orientation a
+          phone is picked up in, it frames a standing or crawling child better than a wide view of
+          the floor either side of him, and it is how the app is actually reached for mid-session.
+          The landscape toggle is still there for a tripod.
+
+          **This value and `MainActivity.portrait` must agree, and nothing reconciles them at
+          runtime.** Change one without the other and the window is tall while the flag says
+          landscape: the resolution request goes out transposed, the overlay button reads the wrong
+          word, and the operator's first tap is spent resyncing the two rather than changing
+          anything.
 
           `configChanges` is load-bearing rather than incidental: it stops the activity being
           recreated on rotation, which would tear down and rebuild the MediaPipe tasks — the exact
@@ -33,7 +41,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape"
+            android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.Remapy">
             <intent-filter>

@@ -51,10 +51,15 @@ Not currently used:
 ## Android app
 
 `android/` holds a live-view Android port: camera + pose skeleton + live motor metrics, for an
-**observer** watching Remy (he never looks at the screen). Nothing is recorded — the desktop
-pipeline stays canonical for recordings, annotations and the cross-session trend. Faces are
-redacted before anything reaches the screen. Deeper notes, including what is deliberately not
-ported and what is still unverified, are in [`android/CLAUDE.md`](android/CLAUDE.md).
+**observer** watching Remy (he never looks at the screen). It opens on a menu and the camera does
+not start until the live view is entered. Nothing is recorded — the desktop pipeline stays
+canonical for recordings, annotations and the cross-session trend. Faces are redacted before
+anything reaches the screen, except in the explicit `raw video` state, which turns pose and
+redaction off together, says so in red for as long as it lasts, and is never remembered across a
+launch — the same switch the desktop CLIs have as `--no-blur-faces`. Deeper notes, including what
+is deliberately not ported and what is still unverified, are in
+[`android/CLAUDE.md`](android/CLAUDE.md); what each row on screen means is in
+[`android/OVERLAY.md`](android/OVERLAY.md).
 
 It is a **separate Gradle build**, not part of the pixi workspace.
 
@@ -232,8 +237,9 @@ Every other row, per mode, with units and the caveats that come with them:
 - [~] port to Android — live view only (camera + pose + live metrics, observer-facing). The metrics
       kernel is reimplemented in Kotlin and pinned to the Python one by exported goldens
       (`pixi run export-fixtures`). **Runs on a Pixel 10 against a real person**, in both hold and
-      crawl modes, at a sustained 15 fps with a portrait/landscape toggle and the overlay clear of
-      the punch-hole camera. What remains is **phone-vs-laptop landmark parity**, which a working
+      crawl modes, at a sustained 15 fps, opening on a menu and framed portrait by default with a
+      landscape toggle and the overlay clear of the punch-hole camera. What remains is
+      **phone-vs-laptop landmark parity**, which a working
       app does not establish: a skeleton that looks right on screen says nothing about whether the
       GPU delegate emits the same `pose_world_landmarks` as the desktop CPU build. Until that is
       measured, an Android session is a new baseline, not a continuation of the laptop trend.
@@ -242,7 +248,35 @@ Every other row, per mode, with units and the caveats that come with them:
 - [ ] measure phone↔laptop landmark parity — record on the laptop, `pixi run export-video`, run the
       mp4 through the app and diff against the `.h5`'s `/pose/landmarks_world`, then compare the
       resulting `hold_metrics`/`crawl_metrics`, which is the figure that actually decides whether
-      the two can share a trend. Needs a **file-source screen in the app**, which does not exist yet
+      the two can share a trend. Needs a **file-source screen in the app**, which does not exist
+      yet — the landing menu carries a disabled entry where it will go. Transport is decided: read
+      the mp4 from and write the landmark dump to `getExternalFilesDir()`, driven by `adb push` /
+      `adb pull`, so it needs no picker and no new permissions. It must drive the landmarker
+      synchronously in `RunningMode.VIDEO`, not the live path's `LIVE_STREAM`, which drops frames
+      under load and would destroy the one exact thing the export gives you: frame *i* of the mp4
+      is row *i* of the `.h5`. Record the source session with `--no-blur-faces`, or the head
+      landmarks diff against pixels the desktop pass never saw
+- [x] make portrait the default framing on Android — it is the orientation a phone is picked up in
+      and it frames a standing or crawling child rather than the floor either side of him; the
+      landscape toggle stays for a tripod. `android:screenOrientation` and `MainActivity.portrait`
+      have to change together, since nothing reconciles them at runtime and a mismatch sends a
+      transposed resolution request while the button shows the wrong word
+- [x] add a `raw video` toggle on Android — stops pose, face detection and redaction together and
+      shows the captured frame as-is. The Android equivalent of the desktop `--no-blur-faces`, and
+      subject to the same thing that makes that acceptable: nothing is recorded, so a raw frame is
+      on screen and nowhere else. Three things keep it honest — a standing red notice for as long
+      as it holds (a word on a button is not proportionate to revealing a child's face), never
+      persisted so every launch starts redacted, and no path that reaches it by omission. It needs
+      its own bypass in `PosePipeline.analyze` because the normal path is driven entirely by the
+      pose result callback, and that bypass must **recycle the rotated bitmap itself** — the
+      tracked path gets that free from `MPImage.close()`, and ~3.7 MB at 15 Hz is the rate
+      `BitmapRing` records the GC losing to
+- [x] add a landing screen with a menu — the app no longer points a camera at a child as a side
+      effect of being launched. `startCamera()` and the permission request move out of `onCreate`
+      onto the "live view" tap, so the system dialog has something behind it explaining the ask;
+      backing out unbinds CameraX but **keeps the MediaPipe tasks loaded**, since closing one while
+      a frame is in flight is the native use-after-free `PosePipeline.reset` documents. Two entries:
+      live view, and a disabled placeholder for the file-source screen the parity measurement needs
 - [x] add an `off` state to the Android overlay mode toggle, alongside `hold`/`crawl`, to remove all
       metric overlays — the toggle now cycles `hold → crawl → off`. Kept at the app layer as a pure
       display flag (`LiveMetricsComputer` requires a mode with a window length and cannot represent

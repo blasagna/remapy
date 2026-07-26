@@ -25,8 +25,10 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * One rendered frame: the image the operator may see, and everything measured from it.
  *
- * [bitmap] has already been through [FaceRedaction] — nothing upstream of this type is safe to
- * display.
+ * [bitmap] has been through [FaceRedaction] **unless [PosePipeline.videoOnly] is set**, which is
+ * the deliberate raw-video state and the only one that reaches here unredacted. Either way nothing
+ * *upstream* of this type is safe to display: the redaction decision has already been taken by the
+ * time a frame is wrapped in one of these, and no other code gets to revisit it.
  */
 class RenderedFrame(
     val bitmap: Bitmap,
@@ -118,6 +120,22 @@ class PosePipeline(
     var blankWhenUnlocated: Boolean = true
 
     /**
+     * Show the captured frame as-is: no pose, no face detection, no redaction.
+     *
+     * **The one state in which an unredacted face reaches the screen.** The equivalent of the
+     * desktop CLIs' `--no-blur-faces`, and subject to the same rule that makes that acceptable —
+     * nothing here is recorded, so the frame is on screen and nowhere else. `MainActivity` owns
+     * the warning that says so, and never persists this across a launch.
+     *
+     * Volatile because [analyze] reads it on the analyzer thread while the toggle writes it on
+     * main. Reading a stale value costs one frame of the previous mode, which is why the flag is
+     * enough on its own and no lock is warranted: unlike [close], there is no native object whose
+     * lifetime depends on the answer.
+     */
+    @Volatile
+    var videoOnly: Boolean = false
+
+    /**
      * Replaced wholesale by [reset]; never mutated in place.
      *
      * Reassigning a `LiveMetricsComputer` is how the rolling window is discarded at a camera
@@ -131,7 +149,15 @@ class PosePipeline(
     private val pending = ConcurrentHashMap<Long, Pending>()
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var lastTimestampMs = -1L
+
+    // Volatile because [updateFps] is now reached from two threads: the MediaPipe callback on the
+    // tracked path, and the analyzer thread directly on the [videoOnly] one. Only one is live at a
+    // time, but a toggle can land with a result still in flight, and a torn `double` read would
+    // put a nonsense frame rate on screen — the one number the operator uses to judge the rest.
+    @Volatile
     private var lastFrameAtMs = 0L
+
+    @Volatile
     private var smoothedFps = 0.0
 
     /**
@@ -255,6 +281,12 @@ class PosePipeline(
             // until a GC that may not come soon enough. Only `rotated` is owned downstream (the
             // MPImage recycles it on close).
             if (rotated !== source) source.recycle()
+
+            if (videoOnly) {
+                emitRaw(rotated)
+                return
+            }
+
             // MediaPipe requires strictly increasing timestamps; a stalled clock would otherwise
             // silently drop frames inside the task.
             var timestampMs = SystemClock.elapsedRealtime() - startedAtMs
@@ -269,6 +301,38 @@ class PosePipeline(
         } finally {
             image.close()
         }
+    }
+
+    /**
+     * Emit a frame with nothing measured from it and nothing redacted on it.
+     *
+     * The bypass for [videoOnly]. It exists as its own path because the normal one is driven
+     * entirely by the pose result callback — skip `detectAsync` and no frame would ever reach the
+     * screen at all.
+     *
+     * **[rotated] is recycled here, and that is the whole of the memory story on this path.** On
+     * the tracked path the `MPImage` owns it and recycles it on close; here nothing downstream
+     * does. A 1280x720 ARGB bitmap is ~3.7 MB on the native heap and this runs at 15 Hz, which is
+     * the rate `BitmapRing`'s notes record the GC losing to. Dropping the reference and trusting
+     * collection reads fine for thirty seconds and OOM-kills partway through a session.
+     *
+     * The readout is [LiveMetrics.blank] rather than a push into the window. There is nothing to
+     * push — no pose ran — and feeding no-pose rows in would fill the rolling window with dropout
+     * for as long as the operator stays on plain video. `up` is reported as `n/a` because no
+     * vertical was consulted, which is the same string the crawl path uses for the same reason.
+     */
+    private fun emitRaw(rotated: Bitmap) {
+        val display = displayRing.acquire(rotated.width, rotated.height)
+        Canvas(display).drawBitmap(rotated, 0f, 0f, null)
+        rotated.recycle()
+        onFrame(
+            RenderedFrame(
+                display,
+                PoseFrame.noPose(),
+                LiveMetrics.blank(mode, computer.windowS, 0, 0.0, 0.0, "n/a"),
+                updateFps(),
+            )
+        )
     }
 
     /**

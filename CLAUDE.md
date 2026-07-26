@@ -39,12 +39,14 @@ Repo-wide rules that apply across packages (package-specific rules live in each 
   that week. `Recording.angles()` and `recording/recorder.py` are the pattern; it binds hardest in
   `motor_metrics` (every number is a function of `derive.py` constants).
 - **Face redaction is applied to the image sink only** (window / Rerun log / recording), always
-  *after* detection runs on the raw frame, so pose accuracy is unaffected and only redacted frames
-  are ever shown or persisted. All four capture CLIs (`video_capture`, `pose_estimation`,
-  `rerun_viewer`, `recording`) expose `--blur-faces`/`--no-blur-faces` (**default on**),
-  `--blur-style {box,mosaic}` (default `box`), `--blur-method {detector,pose,hybrid}` (default
-  `hybrid`), and `--face-model`. Headless `--no-window` runs with no image sink skip blur;
-  `recording`/`rerun_viewer` always redact before persisting.
+  *after* detection runs on the raw frame, so pose accuracy is unaffected and no frame is shown or
+  persisted unredacted unless it was explicitly asked to be. All four capture CLIs
+  (`video_capture`, `pose_estimation`, `rerun_viewer`, `recording`) expose
+  `--blur-faces`/`--no-blur-faces` (**default on**), `--blur-style {box,mosaic}` (default `box`),
+  `--blur-method {detector,pose,hybrid}` (default `hybrid`), and `--face-model`. Headless
+  `--no-window` runs with no image sink skip blur; `recording`/`rerun_viewer` always redact before
+  persisting. The Android app's `raw video` toggle is the same opt-out — off by default, never
+  persisted, and announced on screen while it holds.
 - **Empty `__init__.py` — import from submodules, not the package root** (e.g.
   `from video_capture.capture import VideoCapture`). The `__init__.py` files are intentionally empty.
 - **All capture CLIs request 1280×720 at `derive.FS` by default** (`--width`/`--height`/`--fps`

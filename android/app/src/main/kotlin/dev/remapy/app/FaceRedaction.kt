@@ -14,12 +14,17 @@ import dev.remapy.metrics.PoseFrame
  *
  * **The repo-wide invariant, restated because this is where it is enforced on Android:** redaction
  * is applied to the *image sink only*, always **after** detection has run on the raw frame. Pose
- * accuracy is therefore unaffected, and only redacted frames are ever shown.
+ * accuracy is therefore unaffected, and no frame is displayed unredacted unless it was *asked* to
+ * be — `PosePipeline.videoOnly`, the equivalent of the desktop CLIs' `--no-blur-faces`, which
+ * bypasses this object entirely and puts a standing warning on screen while it holds. There is no
+ * path that shows an unredacted frame by accident or omission; that is the guarantee, rather than
+ * "never".
  *
- * That invariant is the reason this app does not use CameraX's `PreviewView`. A `Preview` use case
- * hands the camera stream straight to a `SurfaceView` — the raw, unredacted feed would reach the
- * screen without passing through here at all. Rendering the analysed frames ourselves costs some
- * smoothness (display rate equals analysis rate) and buys the guarantee.
+ * It is also why this app does not use CameraX's `PreviewView`, and that decision is unaffected by
+ * the raw toggle — arguably it is what makes the toggle safe. A `Preview` use case hands the camera
+ * stream straight to a `SurfaceView`, where redaction would not be *possible*, let alone optional.
+ * Rendering the analysed frames ourselves costs some smoothness (display rate equals analysis rate)
+ * and buys a redaction decision that is always taken deliberately, in one place.
  *
  * `box` is **irreversible**; `mosaic` is only weak de-identification and is recoverable by ML
  * re-identification. Box is the default for that reason.

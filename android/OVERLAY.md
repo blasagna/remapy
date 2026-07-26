@@ -4,9 +4,10 @@ What every row on the phone screen means, for the person holding the phone. For 
 these numbers see `motor_metrics/CLAUDE.md` and the `live.py` docstrings; this file assumes you are
 mid-session and want to know whether to trust what you are looking at.
 
-The panel is top-left. Three buttons are top-right: **exercise** (`hold` / `crawl` / `off`),
-**lens** (`rear` / `front`) and **framing** (`landscape` / `portrait`). Each shows the state that
-is live right now, not the one it will switch to.
+The panel is top-left. Five buttons are top-right, top to bottom: **menu** (back out to the landing
+screen — the back gesture does the same), **pose** (`pose` / `raw video`), **exercise** (`hold` /
+`crawl` / `off`), **lens** (`rear` / `front`) and **framing** (`portrait` / `landscape`). Each shows
+the state that is live right now, not the one it will switch to.
 
 ## Read these first, in every mode
 
@@ -114,7 +115,24 @@ are spent while there is nothing on screen to watch. Leave it off for longer tha
 back shows a populated `hold` readout immediately.
 
 The skeleton stays drawn in `off`. It is the check that tracking is still working, and it costs
-nothing to read.
+nothing to read. (It is the **pose** button, not this one, that takes the skeleton away.)
+
+## `raw video` — redaction off
+
+The pose button switches between `pose` and `raw video`. On `raw video` the app stops pose
+detection, face detection and redaction together and shows the camera image as it is: **the face is
+visible.** The skeleton and the readout go with them, because there is nothing behind either.
+
+While it is on, a red **RAW VIDEO — FACE NOT REDACTED** notice sits where the metrics panel
+normally is. If you do not see that notice, redaction is on.
+
+It is still true that nothing is recorded — no files, no network, no storage permission — so a raw
+frame is on the screen in front of you and nowhere else. The setting is **not remembered**: close
+the app and reopen it and you are back to a redacted view. This is the same switch the desktop
+tools have always had as `--no-blur-faces`.
+
+Coming back to `pose` restarts tracking from scratch, so the readout re-warms over the next five or
+six seconds.
 
 ## Things that apply everywhere
 
@@ -131,8 +149,9 @@ latest sample would be fresher and meaningfully wrong.
 lengths, so there is nothing to carry across. The readout blanks and re-warms over the next five to
 six seconds — expected, and worth doing between trials rather than during one. Flipping the lens or
 the framing discards it too, for a stronger reason: both change what the camera sees, and averaging
-across that would measure the change rather than the child. Coming *out* of `off` does not — that
-cost was already paid on the way in.
+across that would measure the change rather than the child. So does leaving the live view and
+coming back, and so does `raw video`, which stops tracking altogether. Coming *out* of `off` does
+not — that cost was already paid on the way in.
 
 **Nothing is recorded.** No files, no network, no storage permission. Nothing on this screen is
 saved anywhere, so a number worth keeping has to be written down or re-derived from a laptop

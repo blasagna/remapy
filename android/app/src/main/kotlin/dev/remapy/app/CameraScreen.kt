@@ -1,6 +1,7 @@
 package dev.remapy.app
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraSelector
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -67,8 +68,12 @@ fun CameraScreen(
     onToggleMode: () -> Unit,
     portrait: Boolean,
     onToggleOrientation: () -> Unit,
+    videoOnly: Boolean,
+    onToggleVideoOnly: () -> Unit,
+    onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    BackHandler(onBack = onExit)
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         // The video is **full-bleed on purpose**, drawn before and underneath the chrome layer.
         // Insetting it would shrink the image on every device with a cutout in order to protect
@@ -88,7 +93,12 @@ fun CameraScreen(
                     dstOffset = androidx.compose.ui.unit.IntOffset(originX.toInt(), originY.toInt()),
                     dstSize = androidx.compose.ui.unit.IntSize(drawnW.toInt(), drawnH.toInt()),
                 )
-                if (frame != null) drawSkeleton(frame, originX, originY, drawnW, drawnH)
+                // No skeleton in raw video: there is no pose behind it to draw. This is the
+                // one thing `videoOnly` and the readout's `off` state do *not* share — `off`
+                // keeps the skeleton precisely because tracking is still running under it.
+                if (frame != null && !videoOnly) {
+                    drawSkeleton(frame, originX, originY, drawnW, drawnH)
+                }
             }
         }
 
@@ -114,6 +124,21 @@ fun CameraScreen(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // The way back. The system bars are hidden, so the back gesture is there but
+                // undiscoverable — which matters most on a phone handed to a therapist or a
+                // family member who has not used this before.
+                OverlayButton(
+                    label = "menu",
+                    glyph = "‹",
+                    onClick = onExit,
+                )
+                OverlayButton(
+                    // Whether anything is being measured at all, and the only control that
+                    // changes what is *shown* of the child rather than what is drawn over him.
+                    label = if (videoOnly) "raw video" else "pose",
+                    glyph = "◉",
+                    onClick = onToggleVideoOnly,
+                )
                 OverlayButton(
                     // The exercise being watched, and the thing that changes what every row below
                     // means. Named rather than iconified for that reason — and `off` is named the
@@ -142,6 +167,11 @@ fun CameraScreen(
                     color = Color.Gray,
                     modifier = Modifier.align(Alignment.Center),
                 )
+            } else if (videoOnly) {
+                // Takes the panel's place rather than sitting beside it: in this state there are
+                // no metrics to crowd, and the warning belongs where the operator's eye already
+                // goes for the coverage row.
+                RawVideoWarning(modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
             } else if (!overlayOff) {
                 MetricsPanel(
                     metrics = metrics,
@@ -225,6 +255,42 @@ private fun OverlayButton(
             color = Color.White,
             fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,
+        )
+    }
+}
+
+/**
+ * The standing notice that face redaction is off.
+ *
+ * Deliberately not left to the `raw video` button label. Every other control on this screen
+ * changes what is drawn *over* the child; this one changes what is shown *of* him, and it is the
+ * single state in which an unredacted face reaches the screen. A word in the corner of a button is
+ * not proportionate to that, so this is red, permanent while the state holds, and says what is and
+ * is not happening to the frame.
+ *
+ * The second line matters as much as the first: raw is only defensible because nothing here is
+ * written anywhere, and the operator should be able to read that off the screen rather than
+ * remember it.
+ */
+@Composable
+private fun RawVideoWarning(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .background(Color(0xB0000000))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "RAW VIDEO — FACE NOT REDACTED",
+            color = Overlay.BAD_COLOR,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+        )
+        Text(
+            "no pose, no metrics, nothing recorded",
+            color = Color.White,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
         )
     }
 }

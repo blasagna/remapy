@@ -10,6 +10,7 @@ import android.util.Log
 import android.util.Size
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +26,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -41,17 +44,26 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * The live view.
+ * The whole app: a menu, and the live view it leads to.
  *
  * Phase 1 of the Android port: camera + pose + live metrics, for an **observer** watching Remy
  * — he never looks at this screen. Nothing is persisted; the desktop pipeline stays canonical for
  * recordings, annotations and the cross-session trend.
  *
- * Screen-on, and landscape by default, matching how the tripod-mounted camera is used in the
- * data-collection runbook — but the framing is switchable at runtime via the overlay's
- * orientation toggle, since a standing or crawling child frames better vertically.
+ * **One activity, two screens, and no navigation library.** [screen] is an ordinary activity field
+ * like every other piece of UI state here. That is not laziness: the manifest's `configChanges`
+ * stops this activity ever being recreated, which is what lets plain fields hold UI state at all,
+ * and it exists because a recreation would tear down the MediaPipe tasks mid-frame. A `NavHost`
+ * would add a second lifecycle to reason about against exactly one transition.
+ *
+ * Portrait by default — the orientation a phone is picked up in, and the one that frames a
+ * standing or crawling child rather than the floor either side of him. The overlay's toggle
+ * switches to landscape at runtime for a tripod.
  */
 class MainActivity : ComponentActivity() {
+
+    /** Which screen is showing. Two of them, so an enum rather than a navigation graph. */
+    private enum class Screen { MENU, LIVE }
 
     companion object {
         private const val TAG = "MainActivity"
@@ -70,6 +82,9 @@ class MainActivity : ComponentActivity() {
     private var fps by mutableStateOf(0.0)
     private var usingGpu by mutableStateOf(false)
     private var hasCamera by mutableStateOf(false)
+
+    /** Which screen is showing. The app opens on the menu; the camera does not start until [enterLive]. */
+    private var screen by mutableStateOf(Screen.MENU)
 
     private var lensFacing by mutableStateOf(CameraSelector.LENS_FACING_BACK)
 
@@ -100,8 +115,28 @@ class MainActivity : ComponentActivity() {
      * A tripod-mounted phone must not reframe itself because someone picked it up, and every
      * orientation change throws away the rolling window (see [rebindForOrientation]) — so this is
      * a deliberate act, taken between trials, and the button shows which state is live.
+     *
+     * **Must agree with `android:screenOrientation` in the manifest**, which nothing reconciles at
+     * runtime. Disagreeing leaves the window tall while this reads landscape: `startCamera` sends
+     * a transposed resolution request, the button shows the wrong word, and the first tap of the
+     * toggle is spent resyncing rather than reframing.
      */
-    private var portrait by mutableStateOf(false)
+    private var portrait by mutableStateOf(true)
+
+    /**
+     * Whether pose, face detection and redaction are all off, showing the captured video as-is.
+     *
+     * **This is the one state in which an unredacted face reaches the screen**, which is why the
+     * live view draws a standing warning while it is on and why it is deliberately *not* persisted
+     * anywhere: every launch starts redacted, and nothing in this app writes a preference that
+     * could change that. It is the same switch the desktop CLIs have always had as
+     * `--no-blur-faces`, and it is subject to the same rule — nothing is recorded here either, so
+     * a raw frame is on screen and nowhere else.
+     *
+     * Distinct from [overlayOff], which hides the readout over a redacted, tracked video. This
+     * stops the tracking too, so there is nothing left to hide.
+     */
+    private var videoOnly by mutableStateOf(false)
 
     private var cameraProvider: ProcessCameraProvider? = null
 
@@ -109,12 +144,14 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCamera = granted
-        if (granted) startCamera()
+        // Only if the operator is still on the live screen: they can back out to the menu while
+        // the system dialog is up, and starting a camera behind a menu is exactly the kind of
+        // thing that leaves an indicator lit with nothing on screen to explain it.
+        if (granted && screen == Screen.LIVE) startCamera()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Draw behind the system bars and then hide them. The `Fullscreen` platform theme in
         // `themes.xml` no longer does anything on modern API levels, and at `targetSdk = 37`
@@ -134,9 +171,25 @@ class MainActivity : ComponentActivity() {
             PackageManager.PERMISSION_GRANTED
 
         setContent {
-            MaterialTheme {
-                if (hasCamera) {
-                    CameraScreen(
+            // An explicit dark scheme, not the default. `MaterialTheme {}` with no argument
+            // resolves to Compose's *light* palette, which lands near-white text on the black
+            // `windowBackground` from `themes.xml` — invisible. `CameraScreen` never showed it
+            // because it paints its own black, but `PermissionPrompt` has always been dark grey
+            // on black, and a menu would be worse.
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                when {
+                    screen == Screen.MENU -> MenuScreen(
+                        onEnterLive = ::enterLive,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    !hasCamera -> PermissionPrompt(
+                        onRequest = { requestCamera.launch(Manifest.permission.CAMERA) },
+                        onBack = ::exitLive,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    else -> CameraScreen(
                         bitmap = bitmap,
                         frame = frame,
                         metrics = metrics,
@@ -150,18 +203,51 @@ class MainActivity : ComponentActivity() {
                         onToggleMode = ::toggleMode,
                         portrait = portrait,
                         onToggleOrientation = ::toggleOrientation,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    PermissionPrompt(
-                        onRequest = { requestCamera.launch(Manifest.permission.CAMERA) },
+                        videoOnly = videoOnly,
+                        onToggleVideoOnly = ::toggleVideoOnly,
+                        onExit = ::exitLive,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
         }
+    }
 
+    /**
+     * Open the live view, starting the camera.
+     *
+     * The permission request lives here rather than in [onCreate] on purpose: an app that asks for
+     * the camera before showing anything gives the operator nothing to decide against. Asked at
+     * the moment they tap "live view", the reason is on screen behind the dialog.
+     */
+    private fun enterLive() {
+        screen = Screen.LIVE
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
         if (hasCamera) startCamera() else requestCamera.launch(Manifest.permission.CAMERA)
+    }
+
+    /**
+     * Return to the menu, stopping the camera.
+     *
+     * Unbinds CameraX and **keeps the MediaPipe tasks loaded**. Closing them here would be the
+     * native use-after-free [PosePipeline.reset] documents — a task destroyed while the analyzer
+     * thread is inside `detectAsync`. Unbinding stops frames at the source instead, which is what
+     * actually matters: the camera indicator goes out, and re-entering costs no model reload.
+     *
+     * The rolling window goes with it. Whatever happens between leaving and returning is a gap the
+     * window has no business bridging, and [startCamera] rebinds onto a fresh one.
+     */
+    private fun exitLive() {
+        cameraProvider?.unbindAll()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        pipeline?.reset()
+        bitmap = null
+        frame = null
+        metrics = null
+        fps = 0.0
+        screen = Screen.MENU
     }
 
     /**
@@ -214,7 +300,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        rebindForOrientation()
+        // Only while the live view owns the camera. A rebind from the menu would start a camera
+        // nothing is displaying — the indicator lit with no explanation on screen.
+        if (screen == Screen.LIVE) rebindForOrientation()
     }
 
     /**
@@ -280,6 +368,24 @@ class MainActivity : ComponentActivity() {
         }
         metrics = null
         pipeline?.setMode(liveMode)
+    }
+
+    /**
+     * Switch between the tracked, redacted view and the captured video on its own.
+     *
+     * Turning it on stops pose detection, face detection and redaction together, so the skeleton
+     * and the readout go with them — there is nothing behind either. **It is also the one state
+     * where an unredacted face is on screen**, which is why [CameraScreen] draws a standing
+     * warning while it is on rather than relying on the button label.
+     *
+     * The rolling window is discarded either way. Nothing was tracked while raw, so returning to
+     * the tracked view is resuming after a gap, and a window bridging it would average across
+     * however long the operator spent looking at the plain video.
+     */
+    private fun toggleVideoOnly() {
+        videoOnly = !videoOnly
+        metrics = null
+        pipeline?.videoOnly = videoOnly
     }
 
     private fun startCamera() {
@@ -376,8 +482,19 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Shown in place of the live view when the camera permission has not been granted.
+ *
+ * Reached by tapping into the live view, so it needs a way back out: a denied permission would
+ * otherwise be a dead end on a screen with no system bars to press back against.
+ */
 @androidx.compose.runtime.Composable
-private fun PermissionPrompt(onRequest: () -> Unit, modifier: Modifier = Modifier) {
+private fun PermissionPrompt(
+    onRequest: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BackHandler(onBack = onBack)
     Column(
         modifier = modifier.padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
@@ -385,5 +502,6 @@ private fun PermissionPrompt(onRequest: () -> Unit, modifier: Modifier = Modifie
     ) {
         Text("remapy needs the camera to see the session.")
         Button(onClick = onRequest) { Text("Grant camera access") }
+        TextButton(onClick = onBack) { Text("Back to menu") }
     }
 }

@@ -94,8 +94,23 @@ Things worth knowing before editing:
 - **No `PreviewView`, and this is not negotiable.** A CameraX `Preview` use case hands the camera
   stream straight to a `SurfaceView` — the raw, unredacted feed would reach the screen without
   passing through `FaceRedaction` at all. Rendering analysed frames ourselves costs smoothness
-  (display rate = analysis rate) and buys the repo's invariant: only redacted frames are ever shown.
-  `blankWhenUnlocated` closes the last gap by blanking a frame outright when no face was located.
+  (display rate = analysis rate) and buys a redaction decision that is always taken deliberately,
+  in one place. `blankWhenUnlocated` closes the last gap by blanking a frame outright when no face
+  was located. The raw-video toggle below does not weaken this — arguably it depends on it, since
+  a `PreviewView` would make redaction impossible rather than optional.
+- **`PosePipeline.videoOnly` is the one state that shows an unredacted face**, and it is the
+  Android equivalent of the desktop CLIs' long-standing `--no-blur-faces`. It bypasses pose, face
+  detection and `FaceRedaction` together in an early branch of `analyze`, because the normal path
+  is driven entirely by the pose result callback — skip `detectAsync` and no frame reaches the
+  screen at all. Three things hold it honest and none are optional: `CameraScreen` draws a standing
+  red notice for as long as it is on (a word on a button is not proportionate to revealing a
+  child's face); it is **never persisted**, so every launch starts redacted; and nothing is
+  recorded here either, so a raw frame is on screen and nowhere else. The bypass emits
+  `LiveMetrics.blank` rather than pushing no-pose rows into the window — there is nothing to push —
+  and it **recycles the rotated bitmap itself**, which the tracked path gets free from
+  `MPImage.close()`. That last one is the whole memory story on this path: ~3.7 MB at 15 Hz is the
+  rate `BitmapRing` records the GC losing to, so a missing `recycle()` reads fine for thirty
+  seconds and OOM-kills mid-session.
 - **The face detector is gated on `FaceRedaction.hasPoseFaceBox`, never on "is a pose present".**
   This was the intermittent-black-frames bug, and the distinction is the whole of it. Under
   `HYBRID` the pose head box is unavailable in *two* cases — no pose at all, and a tracked body
@@ -177,10 +192,13 @@ Things worth knowing before editing:
   used rather than a hand-assembled `displayCutout.union(statusBars)` because it is already that
   union and cannot be re-derived wrongly later. Known cost: in landscape the cutout inset spans the
   whole edge, so ~30 dp of overlay width goes unused.
-- **Three overlay controls, top-right**: exercise mode (`hold`/`crawl`/`off`), lens (`rear`/`front`)
-  and framing (`landscape`/`portrait`).
-  All three show their current state as a word rather than a glyph, because the operator has to
-  know which is live without inferring it from the image. Switching mode discards the rolling
+- **Five overlay controls, top-right**: `menu` (back to the landing screen), pose (`pose`/`raw
+  video`), exercise mode (`hold`/`crawl`/`off`), lens (`rear`/`front`) and framing
+  (`landscape`/`portrait`).
+  All show their current state as a word rather than a glyph, because the operator has to
+  know which is live without inferring it from the image. `menu` is duplicated by the back gesture
+  and exists anyway: the system bars are hidden, so back is undiscoverable on a phone handed to
+  someone who has not used this before. Switching mode discards the rolling
   window —
   unavoidably, since the two modes use different window lengths (5 s vs 6 s, a crawl needing
   several pull cycles before its period CV means anything) — so the readout blanks and re-warms.
@@ -285,9 +303,12 @@ the phone was propped. The overlay is where each of them surfaces:
 - **The face redaction.** Confirm a face is actually covered before pointing this at anyone. If the
   whole frame goes black, no face was located and `blankWhenUnlocated` did its job. Worth re-checking
   after a lens or framing change specifically, since both alter what the detector is looking at.
+  And confirm the pose control reads `pose`, not `raw video` — the latter is redaction off, and it
+  says so in red where the metrics panel usually is.
 
-Nothing is recorded — no storage permission, no files written, no network. The screen stays on,
-and the framing is landscape by default with a portrait toggle in the overlay.
+Nothing is recorded — no storage permission, no files written, no network. The app opens on a menu
+and the camera does not start until the live view is entered; the screen stays on only while it is.
+Framing is portrait by default, with a landscape toggle in the overlay for a tripod.
 
 ### Running it without a device
 
