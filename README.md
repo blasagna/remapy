@@ -276,5 +276,6 @@ Every other row, per mode, with units and the caveats that come with them:
       displayed rate is also an EMA measured at *result* time, so it folds inference latency into
       what looks like a capture-rate number; instrumenting accept-time separately would separate a
       camera problem from an inference one
+- [ ] default android view to portrait not landscape mode
 - [ ] toggle pose on and off in the android app
 - [ ] add a landing page to the android app, leaving space for recording and review of recordings in the future alongside the live view
