@@ -258,5 +258,5 @@ are not one-time checks though — the overlay shows the things that move betwee
       displayed rate is also an EMA measured at *result* time, so it folds inference latency into
       what looks like a capture-rate number; instrumenting accept-time separately would separate a
       camera problem from an inference one
-- [ ] consider multiple camera views
-- [ ] consider adding a depth camera
+- [ ] toggle pose on and off in the android app
+- [ ] add a landing page to the android app, leaving space for recording and review of recordings in the future alongside the live view
