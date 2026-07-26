@@ -25,6 +25,18 @@ class VideoCapture:
     width, height:
         Optional requested frame size. The device may ignore these and pick the
         nearest supported resolution.
+    fps:
+        Optional requested capture rate. Like ``width``/``height`` this is a
+        *request*: many webcams ignore ``CAP_PROP_FPS`` entirely, so read the
+        :attr:`fps` property back to find out what actually happened.
+
+        Callers that feed :mod:`motor_metrics` should pass
+        ``motor_metrics.derive.FS``. Capturing faster than the metrics grid is not
+        free: :func:`motor_metrics.derive.resample_uniform` interpolates linearly
+        with **no anti-alias filter**, so landmark noise above the grid's Nyquist
+        folds down into the measurement band and lands directly on ``sway_rms_m``.
+        The wrapper itself stays ignorant of the grid — it takes a number, and the
+        CLIs are what know which number.
     """
 
     def __init__(
@@ -32,10 +44,12 @@ class VideoCapture:
         source: int | str = 0,
         width: Optional[int] = None,
         height: Optional[int] = None,
+        fps: Optional[float] = None,
     ) -> None:
         self.source = source
         self.width = width
         self.height = height
+        self.requested_fps = fps
         self._cap: Optional[cv2.VideoCapture] = None
 
     def open(self) -> VideoCapture:
@@ -45,6 +59,8 @@ class VideoCapture:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         if self.height is not None:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        if self.requested_fps is not None:
+            cap.set(cv2.CAP_PROP_FPS, self.requested_fps)
         if not cap.isOpened():
             cap.release()
             raise CaptureError(f"Could not open video source: {self.source!r}")
@@ -84,6 +100,48 @@ class VideoCapture:
         w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         return w, h
+
+    @property
+    def fps(self) -> float:
+        """The rate the device reports, which is **not** necessarily the one requested.
+
+        Returns ``0.0`` when the device declines to report one at all, which some
+        webcams and most file sources do. Compare against ``requested_fps`` rather
+        than assuming the request took: an ignored request means frames arrive faster
+        than the metrics grid and get decimated without anti-aliasing.
+        """
+        if self._cap is None:
+            raise CaptureError("Capture is not open; call open() first.")
+        value = self._cap.get(cv2.CAP_PROP_FPS)
+        return float(value) if value and value > 0 else 0.0
+
+    def fps_warning(self) -> Optional[str]:
+        """A message if the device did not take the requested rate, else ``None``.
+
+        Returned rather than printed so this module stays free of output, and worded
+        once here rather than four times across the capture CLIs. ``None`` when no rate
+        was requested, when the device reports none, or when it matches.
+
+        Capturing *above* the metrics grid is the case worth seeing: nothing fails, the
+        numbers just get quietly noisier, because ``resample_uniform`` decimates by
+        linear interpolation with no anti-alias filter.
+        """
+        if self.requested_fps is None:
+            return None
+        actual = self.fps
+        if actual == 0.0:
+            return (
+                f"note: requested {self.requested_fps:g} fps; the device reports no rate, "
+                "so whether it took is unknown."
+            )
+        if abs(actual - self.requested_fps) < 0.5:
+            return None
+        direction = "above" if actual > self.requested_fps else "below"
+        return (
+            f"warning: requested {self.requested_fps:g} fps but the device is at {actual:g} "
+            f"({direction} the metrics grid). Frames will be resampled onto the "
+            f"{self.requested_fps:g} Hz grid without an anti-alias filter."
+        )
 
     def release(self) -> None:
         """Release the underlying device."""

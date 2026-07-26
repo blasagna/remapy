@@ -7,35 +7,38 @@ data-collection protocol. It computes no metric of its own — it is a buffer, a
 and a dispatch.
 
 **Cost is not the constraint.** A full recompute over a trailing window, measured against
-the 33 ms frame budget that MediaPipe already dominates::
+the 67 ms frame budget that MediaPipe already dominates::
 
     window        hold_metrics   crawl_metrics
-     5 s (150 f)      2.89 ms        2.88 ms
-    10 s (300 f)      4.52 ms        3.01 ms
-    30 s (900 f)     10.89 ms        3.70 ms
+     5 s ( 75 f)      3.10 ms        5.73 ms
+    10 s (150 f)      3.26 ms        6.56 ms
+    30 s (450 f)      7.75 ms        6.00 ms
 
-At :data:`RECOMPUTE_EVERY` frames that is well under 1 % of the budget, so nothing here
-needs an incremental algorithm and the window is simply recomputed whole.
+At :data:`RECOMPUTE_EVERY` frames that is ~2 % of the budget, so nothing here needs an
+incremental algorithm and the window is simply recomputed whole. The margin got wider,
+not narrower, when the grid moved to 15 Hz: a window of a given duration now holds half
+the samples *and* the budget doubled.
 
-**The constraint is that three samples at the end of any window are extrapolated.**
-:func:`derive.window_length` is 7 at the shipped constants, so the Savitzky-Golay
-interior fit needs three samples either side and the last three of *any* window are
-fitted from one side only. Measured on a trailing 5 s window against the offline
-whole-signal :func:`derive.smooth`, as a function of how far back the value is read::
+**The constraint is that the last samples of any window are extrapolated.**
+:func:`derive.window_length` is 5 at the shipped constants, so the Savitzky-Golay
+interior fit needs two samples either side and the last two of *any* window are fitted
+from one side only. Measured on a trailing 5 s window against the offline whole-signal
+:func:`derive.smooth`, as a function of how far back the value is read::
 
-    lag 0 (edge)    position RMSE 0.00228 m    velocity RMSE 0.0757 m/s
-    lag 1 ( 33 ms)                0.00110 m                  0.0474 m/s
-    lag 2 ( 67 ms)                0.00105 m                  0.0246 m/s
-    lag 3 (100 ms)                0.000000                   0.000000
+    lag 0 (edge)    position RMSE 0.00223 m    velocity RMSE 0.0614 m/s
+    lag 1 ( 67 ms)                0.00134 m                  0.0287 m/s
+    lag 2 (133 ms)                0.000000                   0.000000
 
-The test signal's velocity sd was 0.0695 m/s, so **the edge-extrapolated derivative is
-essentially 100 % error**, while reading three samples back reproduces the offline value
-*exactly* rather than approximating it. Hence :data:`LIVE_LAG`. 100 ms is imperceptible
-as feedback and buys a number that is the same measurement the offline table reports.
+The test signal's velocity sd was 0.0679 m/s, so **the edge-extrapolated derivative's
+error is 90 % of the signal's own spread** — essentially no information — while reading
+two samples back reproduces the offline value *exactly* rather than approximating it.
+Hence :data:`LIVE_LAG`, which is computed as that half-width rather than written down.
+133 ms is imperceptible as feedback and buys a number that is the same measurement the
+offline table reports.
 
 That lag governs the **instantaneous** readouts. The **aggregates** (sway RMS, mean
 velocity, cadence) are unaffected in a different way: they average over the whole window,
-so the three edge samples are 3 of ~150 and dilute away. They are computed over the full
+so the two edge samples are 2 of ~75 and dilute away. They are computed over the full
 window and not trimmed — trimming would only move the edge, not remove it.
 
 **Rolling anchors were measured and rejected.** A rolling window re-phases the resample
@@ -63,7 +66,7 @@ passes nothing.
   a short trailing window's edges, so alternating-vs-together stays an offline number.
 
 **Live values must never reach the offline table or the ``.h5``.** Different window, no
-human-marked boundaries, and an instantaneous readout that is three samples old: the same
+human-marked boundaries, and an instantaneous readout that is two samples old: the same
 name would be a different measurement, and mixing them corrupts the cross-session trend
 this package exists for. That is the derive-on-read rule of :mod:`motor_metrics.report`
 pushed one step further, and it is enforced structurally rather than by convention —
@@ -80,19 +83,22 @@ import numpy as np
 from recording.recorder import NUM_LANDMARKS, landmark_rows
 
 from .crawl import crawl_metrics
-from .derive import resample_uniform, smooth
+from .derive import resample_uniform, smooth, window_length
 from .hold import hold_metrics
 from .quality import TORSO, Gate, coverage, landmarks_ok, longest_run
 from .segments import Span
 from .signals import WORLD_UP, trunk_from_vertical
 
-#: Samples to read back from the end of a window for an instantaneous value. Three is
-#: not a tuning choice: it is ``derive.window_length() // 2``, the half-width of the
-#: Savitzky-Golay fit, and at exactly this lag the live value equals the offline one.
-#: See the module docstring's measurement table.
-LIVE_LAG = 3
+#: Samples to read back from the end of a window for an instantaneous value. Not a tuning
+#: choice, and deliberately **computed rather than written down**: it is the half-width of
+#: the Savitzky-Golay fit, and at exactly this lag the live value equals the offline one.
+#: A literal here was correct only for as long as nobody moved a ``derive.py`` constant —
+#: it survived FS 30 -> 15 as a stale ``3`` that still ran, still returned a finite number,
+#: and silently read twice as far into the past as it needed to. See the module docstring's
+#: measurement table.
+LIVE_LAG = window_length() // 2
 
-#: Recompute the expensive window metrics every N frames (~6 Hz at a 30 Hz camera).
+#: Recompute the expensive window metrics every N frames (~3 Hz at a 15 Hz camera).
 #: Cheap quality figures are refreshed on every frame regardless — they are what tells
 #: the operator whether the framing is usable, and they must not lag behind the video.
 RECOMPUTE_EVERY = 5

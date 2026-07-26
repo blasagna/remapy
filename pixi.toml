@@ -25,6 +25,7 @@ live-crawl = "python -m pose_estimation.main --live-metrics crawl"
 notebook = "jupyter lab notebooks/"
 test = "python -m unittest discover -s tests -t . -v"
 test-quiet = "python -m unittest discover -s tests -t ."
+export-fixtures = "python -m tests.fixtures.export"
 
 [dependencies]
 python = ">=3.14.6,<3.15"

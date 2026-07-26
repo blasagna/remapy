@@ -348,7 +348,10 @@ class LiveMetricsComputerTests(unittest.TestCase):
         for i, row in enumerate(world):
             m = c.push(int(i * 1000 / FS), pose_result_from_row(row))
         self.assertEqual(m.live_coverage, 1.0)
-        self.assertGreater(m.live_n_frames, 100)
+        # Derived from the window and the grid rather than written down: the window is
+        # taken in *seconds*, so the frame count it holds is a function of FS and a literal
+        # here silently becomes a different assertion every time FS moves.
+        self.assertGreater(m.live_n_frames, int(MODE_WINDOW_S["hold"] * FS * 0.9))
 
     def test_coverage_gate_is_the_blanking_threshold(self):
         """Half-tracked windows straddle MIN_COVERAGE; the gate must be the decider."""

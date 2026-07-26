@@ -240,3 +240,22 @@ face_blur/models/
 # they are full checkouts of this repo, so committing one nests the repo inside itself.
 .claude/worktrees/
 .claude/settings.local.json
+
+# Gradle (android/): build outputs and per-machine state. The wrapper itself
+# (gradlew, gradle/wrapper/) IS tracked -- it is how the build pins its own version.
+android/.gradle/
+android/build/
+android/*/build/
+android/local.properties
+.kotlin/
+# MediaPipe model bundles, copied/downloaded into the APK by the `fetchModels` Gradle task.
+# Same treatment as the Python `*/models/` directories: fetched on first build, never checked in.
+android/app/src/main/assets/
+
+# Android Studio / IntelliJ project metadata. Generated per-machine on first open of `android/`;
+# nothing in it is source. (The Python-template `.idea/` line above is commented out upstream.)
+.idea/
+*.iml
+
+# JVM heap dumps — Gradle/D8 drop these next to the build on OOM.
+*.hprof

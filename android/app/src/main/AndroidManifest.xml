@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="true" />
+
+    <!--
+      Both are merged in by dependencies (MediaPipe's optional model downloader and CameraX). This
+      app has no business asking for either: the model bundles ship in assets/ and nothing here
+      talks to a network. It points a camera at a child, so an unexplained INTERNET permission is
+      not a cosmetic issue — it is the difference between a claim that footage stays on the device
+      and a claim that it could not leave even if something tried.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+
+    <application
+        android:label="remapy"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Remapy">
+        <!--
+          `screenOrientation` is the *initial* framing only; the overlay's toggle overrides it at
+          runtime via `requestedOrientation`. Portrait is the default: it is the orientation a
+          phone is picked up in, it frames a standing or crawling child better than a wide view of
+          the floor either side of him, and it is how the app is actually reached for mid-session.
+          The landscape toggle is still there for a tripod.
+
+          **This value and `MainActivity.portrait` must agree, and nothing reconciles them at
+          runtime.** Change one without the other and the window is tall while the flag says
+          landscape: the resolution request goes out transposed, the overlay button reads the wrong
+          word, and the operator's first tap is spent resyncing the two rather than changing
+          anything.
+
+          `configChanges` is load-bearing rather than incidental: it stops the activity being
+          recreated on rotation, which would tear down and rebuild the MediaPipe tasks — the exact
+          native use-after-free that `PosePipeline.reset`'s doc describes. MainActivity overrides
+          `onConfigurationChanged` and rebinds CameraX itself instead. Do not remove one without
+          the other.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.Remapy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

@@ -38,6 +38,75 @@ class OpenTests(unittest.TestCase):
         self.assertTrue(fake.released)
 
 
+class FpsTests(unittest.TestCase):
+    """The requested rate, and the warning for when the device declines it.
+
+    Capturing above the ``motor_metrics`` grid is silent and lossy — ``resample_uniform``
+    decimates with no anti-alias filter — so "did the request take?" has to be answerable.
+    """
+
+    def _open(self, requested, reported):
+        """Open at ``requested``, then force what the device *actually* ended up at.
+
+        The override happens after ``open()`` on purpose: ``FakeCapture.set`` stores the
+        value, so a device that silently ignored the request would otherwise be
+        indistinguishable from one that honoured it — which is precisely the case
+        ``fps_warning`` exists to detect.
+        """
+        fake = FakeCapture()
+        with mock.patch("cv2.VideoCapture", return_value=fake):
+            cap = VideoCapture(source=0, fps=requested).open()
+        fake.props[cv2.CAP_PROP_FPS] = reported
+        return cap, fake
+
+    def test_requested_rate_is_forwarded(self):
+        _, fake = self._open(15.0, 15.0)
+        self.assertIn((cv2.CAP_PROP_FPS, 15.0), fake.set_calls)
+
+    def test_no_request_leaves_the_device_alone(self):
+        fake = FakeCapture()
+        with mock.patch("cv2.VideoCapture", return_value=fake):
+            VideoCapture(source=0).open()
+        self.assertNotIn(cv2.CAP_PROP_FPS, [prop for prop, _ in fake.set_calls])
+
+    def test_fps_reads_back_what_the_device_reports(self):
+        cap, _ = self._open(15.0, 29.97)
+        self.assertAlmostEqual(cap.fps, 29.97, places=2)
+
+    def test_unreported_rate_is_zero_not_a_guess(self):
+        cap, _ = self._open(15.0, 0.0)
+        self.assertEqual(cap.fps, 0.0)
+
+    def test_no_warning_when_the_device_took_the_request(self):
+        cap, _ = self._open(15.0, 15.0)
+        self.assertIsNone(cap.fps_warning())
+
+    def test_no_warning_when_nothing_was_requested(self):
+        fake = FakeCapture(props={cv2.CAP_PROP_FPS: 30.0})
+        with mock.patch("cv2.VideoCapture", return_value=fake):
+            cap = VideoCapture(source=0).open()
+        self.assertIsNone(cap.fps_warning())
+
+    def test_warns_when_the_device_runs_faster_than_the_grid(self):
+        cap, _ = self._open(15.0, 30.0)
+        msg = cap.fps_warning()
+        self.assertIsNotNone(msg)
+        self.assertIn("above", msg)
+        self.assertIn("anti-alias", msg)
+
+    def test_warns_when_the_device_runs_slower_than_the_grid(self):
+        cap, _ = self._open(15.0, 10.0)
+        self.assertIn("below", cap.fps_warning())
+
+    def test_unreported_rate_says_so_rather_than_claiming_success(self):
+        cap, _ = self._open(15.0, 0.0)
+        self.assertIn("reports no rate", cap.fps_warning())
+
+    def test_fps_before_open_raises(self):
+        with self.assertRaises(CaptureError):
+            _ = VideoCapture().fps
+
+
 class ReadTests(unittest.TestCase):
     def test_read_before_open_raises(self):
         with self.assertRaises(CaptureError):

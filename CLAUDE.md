@@ -27,6 +27,7 @@ Each entry links to the package's own `CLAUDE.md` (loaded on demand when you wor
 - `motor_metrics/` — continuous motor metrics for GMFM-88 trials (offline + live) → `motor_metrics/CLAUDE.md`
 - `list_devices/` — enumerate compatible capture devices → `list_devices/CLAUDE.md`
 - `adafruit_feather_sense/` — CircuitPython IMU streamer (serial/BLE) + host readers → `adafruit_feather_sense/CLAUDE.md`
+- `android/` — Kotlin port of the live metrics kernel (separate Gradle build) → `android/CLAUDE.md`
 
 ## Global conventions
 
@@ -38,16 +39,23 @@ Repo-wide rules that apply across packages (package-specific rules live in each 
   that week. `Recording.angles()` and `recording/recorder.py` are the pattern; it binds hardest in
   `motor_metrics` (every number is a function of `derive.py` constants).
 - **Face redaction is applied to the image sink only** (window / Rerun log / recording), always
-  *after* detection runs on the raw frame, so pose accuracy is unaffected and only redacted frames
-  are ever shown or persisted. All four capture CLIs (`video_capture`, `pose_estimation`,
-  `rerun_viewer`, `recording`) expose `--blur-faces`/`--no-blur-faces` (**default on**),
-  `--blur-style {box,mosaic}` (default `box`), `--blur-method {detector,pose,hybrid}` (default
-  `hybrid`), and `--face-model`. Headless `--no-window` runs with no image sink skip blur;
-  `recording`/`rerun_viewer` always redact before persisting.
+  *after* detection runs on the raw frame, so pose accuracy is unaffected and no frame is shown or
+  persisted unredacted unless it was explicitly asked to be. All four capture CLIs
+  (`video_capture`, `pose_estimation`, `rerun_viewer`, `recording`) expose
+  `--blur-faces`/`--no-blur-faces` (**default on**), `--blur-style {box,mosaic}` (default `box`),
+  `--blur-method {detector,pose,hybrid}` (default `hybrid`), and `--face-model`. Headless
+  `--no-window` runs with no image sink skip blur; `recording`/`rerun_viewer` always redact before
+  persisting. The Android app's `raw video` toggle is the same opt-out — off by default, never
+  persisted, and announced on screen while it holds.
 - **Empty `__init__.py` — import from submodules, not the package root** (e.g.
   `from video_capture.capture import VideoCapture`). The `__init__.py` files are intentionally empty.
-- **All capture CLIs request 1280×720 by default** (`--width`/`--height` override; the device picks
-  the nearest supported mode).
+- **All capture CLIs request 1280×720 at `derive.FS` by default** (`--width`/`--height`/`--fps`
+  override; the device picks the nearest supported mode). The rate default is deliberately the
+  *metrics grid*, not a camera-native 30: `resample_uniform` interpolates linearly with **no
+  anti-alias filter**, so capturing above the grid folds landmark noise from above its Nyquist
+  down into the measurement band and straight onto `sway_rms_m`, silently. `CAP_PROP_FPS` is
+  advisory and many webcams ignore it, so `VideoCapture.fps_warning()` reports the mismatch rather
+  than letting it pass unseen.
 - **MediaPipe is the Tasks-API-only build** (0.10.35, Python 3.14): `mp.solutions.*` and
   `mediapipe.framework` are absent — use the `mediapipe.tasks.python.vision` classes; skeletons are
   drawn manually with OpenCV. Detail in `pose_estimation/` and `face_blur/`.
@@ -85,6 +93,9 @@ Tasks defined under `[tasks]` in `pixi.toml`:
   (`--live-metrics {hold,crawl}` on `pose` and `rerun`; `--live-window-s` to change the window).
 - `pixi run notebook` — Jupyter Lab in `notebooks/` (offline metric exploration).
 - `pixi run test` — run the unit-test suite (verbose). `pixi run test-quiet` for the terse summary.
+- `pixi run export-fixtures` — regenerate the cross-language metrics goldens the Kotlin port is
+  tested against (`android/metrics/src/test/resources/goldens.json`). **Re-run it whenever a
+  `derive.py` constant changes**, or the port stays pinned to the old filter chain.
 
 When adding a build/lint/test workflow, wire it up as a Pixi task so it's captured in the repo
 rather than run ad hoc.
@@ -119,6 +130,9 @@ display, or GPU; ~480 tests run in a few seconds. **Per-file test notes live in 
 - Pure logic (`redact`, `angles`, `pose_blur`, `factory`) runs unmocked against real NumPy/OpenCV.
 - Discovery is `python -m unittest discover -s tests -t .`; run from the repo root so the packages
   import. `tests/` is a package (`__init__.py`) so `from tests.fakes import …` resolves.
+- `tests/fixtures/export.py` is **not a test** — it is the generator for the cross-language goldens
+  the Kotlin port in `android/` is checked against (`pixi run export-fixtures`). It has no
+  `TestCase` and does not match the `test*.py` discovery pattern, so the suite ignores it.
 
 ## Notes
 

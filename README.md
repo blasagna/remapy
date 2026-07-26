@@ -48,6 +48,143 @@ Not currently used:
   [Physiopedia](https://www.physio-pedia.com/Alberta_Infant_Motor_Scale_(AIMS)) ·
   [Score sheets (Elsevier)](https://www.us.elsevierhealth.com/alberta-infant-motor-scale-score-sheets-aims-9780323798426.html)
 
+## Android app
+
+`android/` holds a live-view Android port: camera + pose skeleton + live motor metrics, for an
+**observer** watching Remy (he never looks at the screen). It opens on a menu and the camera does
+not start until the live view is entered. Nothing is recorded — the desktop pipeline stays
+canonical for recordings, annotations and the cross-session trend. Faces are redacted before
+anything reaches the screen, except in the explicit `raw video` state, which turns pose and
+redaction off together, says so in red for as long as it lasts, and is never remembered across a
+launch — the same switch the desktop CLIs have as `--no-blur-faces`. Deeper notes, including what
+is deliberately not ported and what is still unverified, are in
+[`android/CLAUDE.md`](android/CLAUDE.md); what each row on screen means is in
+[`android/OVERLAY.md`](android/OVERLAY.md).
+
+It is a **separate Gradle build**, not part of the pixi workspace.
+
+### Option A: Android Studio
+
+The simplest route, and it sidesteps the SDK/JDK/`adb` setup below entirely — Studio bundles its
+own JDK and manages the SDK for you.
+
+**Open `android/`, not the repository root.** The root has no `settings.gradle.kts`; Studio would
+just see a folder of Python. (The Python side stays in your editor of choice — the two builds are
+independent.)
+
+Requires **Android Studio Quail 2 (2026.1.2) or newer**, because the project is on AGP 9.3 and
+Studio refuses projects whose AGP is newer than it supports. Quail 2 is the current stable release,
+so a fresh download is fine; an older install will need updating.
+
+After it syncs, the green **Run** button builds, installs and launches on a connected phone or an
+emulator, and Logcat is right there — which is how the two bitmap bugs in the pipeline were found.
+The metrics tests run from the gutter icons in `metrics/src/test/…`, or via the Gradle panel.
+
+If Studio installs its own SDK rather than reusing `~/Android/Sdk`, point the build at it:
+`echo "sdk.dir=<studio-sdk-path>" > android/local.properties`.
+
+### Option B: command line
+
+One-time setup. Install the Android SDK (skip if you already have Android Studio — point
+`ANDROID_HOME` at its SDK):
+
+```bash
+mkdir -p ~/Android/Sdk/cmdline-tools
+# Grab the current "Command line tools only" Linux zip from
+# https://developer.android.com/studio#command-line-tools-only, then:
+unzip commandlinetools-linux-*.zip -d /tmp/cmdline
+mv /tmp/cmdline/cmdline-tools ~/Android/Sdk/cmdline-tools/latest
+```
+
+**Put the SDK tools on your `PATH`** — this is what makes `adb` available, and it is the step that
+trips people up, because `adb` ships *with the SDK* and there is nothing separate to install:
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+export ANDROID_HOME="$HOME/Android/Sdk"
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+EOF
+source ~/.bashrc
+```
+
+Do **not** `apt install adb` on top of this. You would end up with a second, older `adb` ahead of
+the SDK's on `PATH`, and mismatched clients fight over the adb server port
+(`adb server version doesn't match this client`).
+
+Then accept the licences and install the packages the build needs:
+
+```bash
+yes | sdkmanager --licenses
+sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;36.0.0"
+```
+
+(Build-tools 36 is not a typo — it is what AGP 9.3 picks by default even at `compileSdk = 37`. If
+you get the version wrong, Gradle downloads the one it wants on the first build anyway, since the
+licences are already accepted.)
+
+Finally, from the repository root, point the build at the SDK:
+
+```bash
+echo "sdk.dir=$HOME/Android/Sdk" > android/local.properties
+```
+
+Verify with `adb version` (expect platform-tools 37.x) and `cd android && ./gradlew :metrics:test`,
+which runs the metrics suite with no device and no phone attached.
+
+### Connecting a phone
+
+Steps 1-3 apply whichever route you took; only the last step differs. The APK is debug-signed —
+fine for sideloading, not distributable. Needs Android 8.0 (API 26) or newer on an arm64 device.
+
+1. On the phone: Settings → About phone → tap *Build number* seven times, then
+   System → Developer options → **USB debugging**.
+2. Plug it in and accept the *Allow USB debugging?* prompt.
+3. `adb devices` — it should list as `device`. (In Studio the phone appears in the device
+   dropdown instead; `adb` is bundled, so this check works there too via its terminal.)
+4. Install and launch it:
+   - **Studio** — pick the phone in the device dropdown and hit **Run**.
+   - **Command line** — `cd android && ./gradlew :app:installDebug`, then open **remapy** from the
+     app drawer.
+5. Grant the camera permission when asked.
+
+For a phone already on a tripod, wireless works too (Android 11+): Developer options →
+*Wireless debugging* → *Pair device with pairing code*, then `adb pair <host>:<port>` with that
+code, and `adb connect <host>:<port>` using the different port on the main wireless-debugging
+screen.
+
+### If `adb devices` doesn't say `device`
+
+Three distinct failures, three different fixes:
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `adb: command not found` | SDK tools not on `PATH` | the `~/.bashrc` block above; open a new terminal |
+| `unauthorized` | the on-phone prompt was not accepted | unplug, replug, tap **Allow** (tick "always allow") |
+| `no permissions` | udev rules missing (Linux only) | `sudo apt install android-sdk-platform-tools-common`, then replug |
+| *(empty list)* | cable is charge-only, or USB debugging is off | try another cable; re-check step 1 |
+
+On the udev case: that package installs **only** a rules file — no binaries, so it cannot shadow
+the SDK's `adb`. Its rule carries `TAG+="uaccess"`, so on a systemd desktop you do **not** need to
+join the `plugdev` group, despite what most guides say. Many setups need none of this; check
+before fixing.
+
+### What to look at at the start of a session
+
+The app has been run on a real device against a real person, in both hold and crawl modes. These
+are not one-time checks though — the overlay shows the things that move between sessions:
+
+- **`fps`** — green at ≥ 13.5 (90 % of the 15 Hz grid). Below that the filter chain is resampling
+  *up* and inventing correlated samples. The `gpu`/`cpu` label beside it is the first thing to
+  suspect. The app caps itself at 15 to match the grid, so a healthy reading sits at 15, not above.
+- **`coverage`** — green means the torso landmarks are trusted. Metrics read `--` rather than a
+  stale number when it drops; that is the intended behaviour, not a bug.
+- **`up world_y`** — a reminder that the vertical assumes a level camera.
+- **The face redaction** — confirm a face is actually covered before pointing this at anyone. A
+  fully black frame means no face was located and the app blanked it rather than risk showing one.
+
+Every other row, per mode, with units and the caveats that come with them:
+[`android/OVERLAY.md`](android/OVERLAY.md).
+
 ## TODO
 
 - [x] increase IMU sampling rate to at least 50, ideally 100 Hz — **100 Hz over USB serial, 50 Hz
@@ -72,9 +209,9 @@ Not currently used:
       "favors one leg" readout, since that is where Remy's signal is), or `--live-metrics` on `pose`
       and `rerun`. `motor_metrics/live.py` feeds a
       rolling window to the *same* `hold_metrics`/`crawl_metrics` the offline table uses. Cost was
-      never the obstacle (~3 ms per recompute against a 33 ms frame); the constraints are that the
-      Savitzky-Golay fit leaves the last 3 samples extrapolated — so the readout is deliberately
-      100 ms old, where it equals the offline value *exactly* — and that without an annotator there
+      never the obstacle (~3 ms per recompute against a 67 ms frame); the constraints are that the
+      Savitzky-Golay fit leaves the last 2 samples extrapolated — so the readout is deliberately
+      133 ms old, where it equals the offline value *exactly* — and that without an annotator there
       is no honest trial boundary, so the window is fixed and **nothing infers movement onset**.
       SPARC, submovement counts and any duration metric are therefore still offline-only: they need
       an onset/offset the code is not entitled to invent. Live values never enter the `.h5` or the
@@ -97,6 +234,82 @@ Not currently used:
       timeline. Would give a true gravity vector (no level-camera assumption) and 100 Hz sway
 - [ ] program feather sense in C++ with Zephyr RTOS, or embedded Rust (embassy-nrf and nrf-hal)
 - [ ] program feather sense in embedded Rust (embassy-nrf and nrf-hal). Use schematics from adafruit to build BSP.
-- [ ] port to Android 
-- [ ] consider multiple camera views
-- [ ] consider adding a depth camera
+- [~] port to Android — live view only (camera + pose + live metrics, observer-facing). The metrics
+      kernel is reimplemented in Kotlin and pinned to the Python one by exported goldens
+      (`pixi run export-fixtures`). **Runs on a Pixel 10 against a real person**, in both hold and
+      crawl modes, at a sustained 15 fps, opening on a menu and framed portrait by default with a
+      landscape toggle and the overlay clear of the punch-hole camera. What remains is
+      **phone-vs-laptop landmark parity**, which a working
+      app does not establish: a skeleton that looks right on screen says nothing about whether the
+      GPU delegate emits the same `pose_world_landmarks` as the desktop CPU build. Until that is
+      measured, an Android session is a new baseline, not a continuation of the laptop trend.
+      Build/install steps and the per-session checklist: `android/CLAUDE.md`. What each row on the
+      screen means: [`android/OVERLAY.md`](android/OVERLAY.md)
+- [ ] measure phone↔laptop landmark parity — record on the laptop, `pixi run export-video`, run the
+      mp4 through the app and diff against the `.h5`'s `/pose/landmarks_world`, then compare the
+      resulting `hold_metrics`/`crawl_metrics`, which is the figure that actually decides whether
+      the two can share a trend. Needs a **file-source screen in the app**, which does not exist
+      yet — the landing menu carries a disabled entry where it will go. Transport is decided: read
+      the mp4 from and write the landmark dump to `getExternalFilesDir()`, driven by `adb push` /
+      `adb pull`, so it needs no picker and no new permissions. It must drive the landmarker
+      synchronously in `RunningMode.VIDEO`, not the live path's `LIVE_STREAM`, which drops frames
+      under load and would destroy the one exact thing the export gives you: frame *i* of the mp4
+      is row *i* of the `.h5`. Record the source session with `--no-blur-faces`, or the head
+      landmarks diff against pixels the desktop pass never saw
+- [x] make portrait the default framing on Android — it is the orientation a phone is picked up in
+      and it frames a standing or crawling child rather than the floor either side of him; the
+      landscape toggle stays for a tripod. `android:screenOrientation` and `MainActivity.portrait`
+      have to change together, since nothing reconciles them at runtime and a mismatch sends a
+      transposed resolution request while the button shows the wrong word
+- [x] add a `raw video` toggle on Android — stops pose, face detection and redaction together and
+      shows the captured frame as-is. The Android equivalent of the desktop `--no-blur-faces`, and
+      subject to the same thing that makes that acceptable: nothing is recorded, so a raw frame is
+      on screen and nowhere else. Three things keep it honest — a standing red notice for as long
+      as it holds (a word on a button is not proportionate to revealing a child's face), never
+      persisted so every launch starts redacted, and no path that reaches it by omission. It needs
+      its own bypass in `PosePipeline.analyze` because the normal path is driven entirely by the
+      pose result callback, and that bypass must **recycle the rotated bitmap itself** — the
+      tracked path gets that free from `MPImage.close()`, and ~3.7 MB at 15 Hz is the rate
+      `BitmapRing` records the GC losing to
+- [x] add a landing screen with a menu — the app no longer points a camera at a child as a side
+      effect of being launched. `startCamera()` and the permission request move out of `onCreate`
+      onto the "live view" tap, so the system dialog has something behind it explaining the ask;
+      backing out unbinds CameraX but **keeps the MediaPipe tasks loaded**, since closing one while
+      a frame is in flight is the native use-after-free `PosePipeline.reset` documents. Two entries:
+      live view, and a disabled placeholder for the file-source screen the parity measurement needs
+- [x] add an `off` state to the Android overlay mode toggle, alongside `hold`/`crawl`, to remove all
+      metric overlays — the toggle now cycles `hold → crawl → off`. Kept at the app layer as a pure
+      display flag (`LiveMetricsComputer` requires a mode with a window length and cannot represent
+      `off`), and of the two options it **keeps pushing frames** rather than stopping: not pushing
+      buys back a ~3 ms recompute against a 67 ms frame and costs a nullable `RenderedFrame.metrics`
+      threaded through the whole render path. So `off` hides the panel — `coverage` and `fps` with
+      it, since an `off` that leaves a panel on screen is not off. Entering `off` is also what
+      switches the kernel back to `hold`, so the window discard the cycle owes is spent while
+      nothing is drawn, and the tap back out lands on a populated readout rather than five seconds
+      of dashes
+- [x] document what each live overlay row means, per mode — `android/OVERLAY.md`, operator-facing
+      and deliberately not a section of `android/CLAUDE.md`, which is written for someone editing
+      the chain. Every row's units, direction and caveat, plus the two that are easiest to
+      misread: `trunk dev` is deviation from the window's *own* median lean and not from upright,
+      and `leg favor` is `2(L-R)/(L+R)` on a ±2 scale, so `0.67` is one leg travelling **twice** as
+      far as the other — not "67 % more", which a code comment had claimed
+- [x] investigate intermittent black frames on Android, a fraction of a second at a time. Confirmed
+      `blankWhenUnlocated`, but the trigger was narrower and more fixable than "a momentary miss":
+      `PosePipeline` ran the face detector only when **no pose was present**, while
+      `FaceRedaction.poseHeadBox` also returns nothing for a *tracked* body whose eleven face
+      landmarks are all below the visibility gate — head down or turned away, i.e. a belly crawl.
+      In that state `HYBRID`'s fallback was handed an empty detection list, nothing was redacted
+      and the frame blanked. The detector is now gated on `FaceRedaction.hasPoseFaceBox`, which
+      shares its scan with `poseHeadBox` so the two cannot disagree. Hysteresis on the last known
+      box stays unbuilt on purpose — it is a product call, to be made against the blank counter
+      `PosePipeline.noteBlanked` now logs rather than in advance — and "stop blanking" stays off
+      the table
+- [x] default android view to portrait not landscape mode
+- [x] toggle pose on and off in the android app
+- [x] add a landing page to the android app, leaving space for recording and review of recordings in the future alongside the live view
+- [ ] investigate Android fps dipping below 15 while the overlay still reads `gpu`. The label
+      reports which delegate was successfully *built* at startup, never that it is currently
+      performing, so a thermally throttled GPU still reads `gpu` — rule that out first. The
+      displayed rate is also an EMA measured at *result* time, so it folds inference latency into
+      what looks like a capture-rate number; instrumenting accept-time separately would separate a
+      camera problem from an inference one

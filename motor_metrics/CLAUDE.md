@@ -50,9 +50,18 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
 - `derive.py` — resample to a uniform grid, then Savitzky-Golay. `FS`/`WINDOW_S`/`POLY` are
   **module constants, not per-call knobs**: two numbers are comparable only through an identical
   chain, and these get compared across months. The chain's measured derivative gain is documented
-  and pinned (0.997 at 0.25 Hz → 0.95 at 1 Hz → 0.61 at 3 Hz) — a *bias*, identical for every
+  and pinned (0.994 at 0.25 Hz → 0.90 at 1 Hz → 0.34 at 3 Hz) — a *bias*, identical for every
   trial, so it cancels within-child but makes the magnitudes non-comparable to any other pipeline.
   First and only use of scipy in the repo. `smooth` returns NaN below the window, never raises.
+  **`FS` and `WINDOW_S` are a pair, not two independent knobs.** The window is written in seconds
+  and applied in samples, so `WINDOW_S=0.25` at `FS=15` gives `int(0.25*15)=3` — and three samples
+  fit a quadratic *exactly*, making the filter the identity and every derivative a raw central
+  difference, silently and without raising. The grid moved 30 → 15 Hz to match what the capture
+  hardware sustains, so `WINDOW_S` moved 0.25 → 0.35 (5 samples, 0.333 s). `WindowLengthTests` pins
+  both the shipped pair clearing the floor and the collapse case itself. **Every number computed
+  before that change belongs to a different scale** — recoverable, since metrics are derived on
+  read, so re-running `pixi run metrics` regenerates past sessions on the new chain; any figure
+  already written down elsewhere is not.
 - `segments.py` — annotations → frame spans. Drops unparseable labels and anything overlapping an
   `exclude` **whole** (a hold whose middle is untrustworthy is not a shorter valid hold; trimming
   would invent a boundary). Mark two trials around the excluded stretch to keep the good parts.
@@ -64,7 +73,8 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   `mean_velocity_mps` or a common `window_s`. **Ellipse area reads ~0 for one-axis rocking** (a
   line encloses nothing), so read it next to the ML/AP RMS, never alone.
 - `transition.py` — `sparc` (spectral arc length) is primary on trunk angular speed. **Read only
-  against itself**: at 30 Hz the absolute value is a pipeline artifact. Its measured noise
+  against itself**: the absolute value is a pipeline artifact of the grid it was computed on — the
+  integrated band is `min(SPARC_FC, fs/2)`, so `FS` moves it. Its measured noise
   robustness has a **ceiling** — flat to ~2 % of peak speed, erratic past ~5 % (sd 0.24) — so big
   brisk transitions score reliably and small slow ones may not; prefer the median of several.
   It separates *fluid from effortful* but does **not** count corrections (more submovements
@@ -92,12 +102,15 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
   `tests.fakes.fake_recording` does), so **no metric math is reimplemented**; it pushes through
   `recording.recorder.landmark_rows` — extracted from `HDF5Recorder.append` — so a live frame and a
   recorded one convert identically, NaN convention included. Two measurements shape it. **Cost is
-  not the constraint** (~2.9 ms per recompute over a 5 s window, ~12.6 ms over 30 s, against a 33 ms
+  not the constraint** (~3 ms per recompute over a 5 s window, ~8 ms over 30 s, against a 67 ms
   frame MediaPipe already dominates), so the window is recomputed whole every `RECOMPUTE_EVERY`
-  frames. **`LIVE_LAG = 3` is**: the Savitzky-Golay fit leaves the last 3 samples of *any* window
-  one-sided, and measured against the offline chain the edge-extrapolated velocity is ~100 % error
-  (RMSE 0.0757 m/s vs a 0.0695 m/s signal sd) while at lag 3 the live value is **bit-identical** to
-  the offline one. So instantaneous readouts are 100 ms old *on purpose*; aggregates (sway RMS,
+  frames. **`LIVE_LAG` is computed, not written down** (`window_length() // 2`, currently 2): the
+  Savitzky-Golay fit leaves the last 2 samples of *any* window one-sided, and measured against the
+  offline chain the edge-extrapolated velocity carries ~90 % of the signal's own spread as error
+  (RMSE 0.0614 m/s vs a 0.0679 m/s signal sd) while at that lag the live value is **bit-identical**
+  to the offline one. It was a literal `3` until `FS` moved and it silently became a stale value
+  that still ran — deriving it is what stops that recurring. So instantaneous readouts are 133 ms
+  old *on purpose*; aggregates (sway RMS,
   cadence) span the window and dilute the 3 edge samples away, and are not trimmed — trimming only
   moves the edge. A fixed-epoch resample anchor was tried and **rejected on measurement** (rolling
   jitter 0.143 % → 0.124 % of value, with a *worse* max), so `derive.py` keeps its no-per-call-knobs

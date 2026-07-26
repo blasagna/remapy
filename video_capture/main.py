@@ -18,6 +18,7 @@ import time
 import cv2
 
 from face_blur.factory import BLUR_METHODS, build_blurrer
+from motor_metrics import derive
 
 from .capture import CaptureError, VideoCapture
 
@@ -34,6 +35,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--width", type=int, default=1280, help="Requested frame width (default: 1280).")
     parser.add_argument("--height", type=int, default=720, help="Requested frame height (default: 720).")
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=derive.FS,
+        help=(
+            "Requested capture rate (default: %(default)s, the motor_metrics grid). "
+            "Advisory — many webcams ignore it; a warning is printed when the device "
+            "reports a different rate, because capturing above the grid means the "
+            "metrics chain decimates without anti-aliasing."
+        ),
+    )
     parser.add_argument(
         "--max-frames",
         type=int,
@@ -92,8 +104,11 @@ def main(argv: list[str] | None = None) -> int:
 
         pose = PoseEstimator()
     try:
-        with VideoCapture(source, width=args.width, height=args.height) as cap:
+        with VideoCapture(source, width=args.width, height=args.height, fps=args.fps) as cap:
             print(f"Opened source {source!r} at resolution {cap.resolution[0]}x{cap.resolution[1]}")
+            fps_note = cap.fps_warning()
+            if fps_note:
+                print(fps_note)
             if args.no_window:
                 print("To exit cleanly: press Ctrl+C.")
             else:
