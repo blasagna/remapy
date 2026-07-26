@@ -63,6 +63,7 @@ fun CameraScreen(
     canFlipCamera: Boolean,
     onFlipCamera: () -> Unit,
     mode: String,
+    overlayOff: Boolean,
     onToggleMode: () -> Unit,
     portrait: Boolean,
     onToggleOrientation: () -> Unit,
@@ -115,8 +116,9 @@ fun CameraScreen(
             ) {
                 OverlayButton(
                     // The exercise being watched, and the thing that changes what every row below
-                    // means. Named rather than iconified for that reason.
-                    label = mode,
+                    // means. Named rather than iconified for that reason — and `off` is named the
+                    // same way, so a hidden panel is never mistaken for a stalled one.
+                    label = if (overlayOff) "off" else mode,
                     glyph = "⇄",
                     onClick = onToggleMode,
                 )
@@ -140,7 +142,7 @@ fun CameraScreen(
                     color = Color.Gray,
                     modifier = Modifier.align(Alignment.Center),
                 )
-            } else {
+            } else if (!overlayOff) {
                 MetricsPanel(
                     metrics = metrics,
                     fps = fps,

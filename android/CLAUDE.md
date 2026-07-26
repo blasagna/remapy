@@ -96,6 +96,21 @@ Things worth knowing before editing:
   passing through `FaceRedaction` at all. Rendering analysed frames ourselves costs smoothness
   (display rate = analysis rate) and buys the repo's invariant: only redacted frames are ever shown.
   `blankWhenUnlocated` closes the last gap by blanking a frame outright when no face was located.
+- **The face detector is gated on `FaceRedaction.hasPoseFaceBox`, never on "is a pose present".**
+  This was the intermittent-black-frames bug, and the distinction is the whole of it. Under
+  `HYBRID` the pose head box is unavailable in *two* cases — no pose at all, and a tracked body
+  whose eleven face landmarks are all below the visibility gate (head down, turned away, far off:
+  a belly crawl). Gating on `!hasPose` covered only the first, so in the second the detector never
+  ran, `redact`'s fallback got an empty detection list, nothing was redacted and
+  `blankWhenUnlocated` blanked the frame. The predicate shares `faceBounds` with `poseHeadBox`
+  precisely so the two cannot disagree about what "located" means. Note the Python side has the
+  same `if pose else detector` branch (`face_blur/hybrid.py`) and is *not* wrong in the same way:
+  it has no `blankWhenUnlocated`, so the case degrades to an unredacted face there — worse, and
+  the reason Android added the blanking. The cost of the fix is that the detector now runs on more
+  frames, synchronously on the callback thread, which pushes on the open fps question.
+  `PosePipeline.noteBlanked` logs one line per blank *burst* with `pose=` and `detections=`
+  beside a session total: it is kept deliberately, because the screen cannot tell a correct blank
+  (nobody in frame) from this bug returning, and both just look like the video flicking to black.
 - **`INTERNET` and `ACCESS_NETWORK_STATE` are explicitly removed** in the manifest. Both get merged
   in by dependencies; neither is needed (models ship in `assets/`). An app that points a camera at a
   child should not be *able* to talk to a network.
@@ -162,16 +177,31 @@ Things worth knowing before editing:
   used rather than a hand-assembled `displayCutout.union(statusBars)` because it is already that
   union and cannot be re-derived wrongly later. Known cost: in landscape the cutout inset spans the
   whole edge, so ~30 dp of overlay width goes unused.
-- **Three overlay controls, top-right**: exercise mode (`hold`/`crawl`), lens (`rear`/`front`) and
-  framing (`landscape`/`portrait`).
+- **Three overlay controls, top-right**: exercise mode (`hold`/`crawl`/`off`), lens (`rear`/`front`)
+  and framing (`landscape`/`portrait`).
   All three show their current state as a word rather than a glyph, because the operator has to
   know which is live without inferring it from the image. Switching mode discards the rolling
   window —
   unavoidably, since the two modes use different window lengths (5 s vs 6 s, a crawl needing
   several pull cycles before its period CV means anything) — so the readout blanks and re-warms.
+- **`off` is an app-layer display flag, not a third mode string**, and it must stay that way.
+  `LiveMetricsComputer` is constructed from a mode with a window length and rejects anything
+  outside `MODE_WINDOW_S`, so `off` cannot be represented there at all. `MainActivity.overlayOff`
+  hides `MetricsPanel` while the pipeline keeps running underneath. **Entering `off` is what calls
+  `setMode(HOLD)`; leaving it touches nothing at all** — the cycle returns to `hold` and the two
+  modes have different window lengths, so a discard has to happen somewhere on the way round, and
+  this spends it while the panel is hidden instead of in the one place the operator would sit and
+  watch it re-warm. Reversing those two makes the toggle feel broken without changing a line of
+  metrics code. The rejected alternative was to stop pushing frames; it buys a ~3 ms recompute
+  against a 67 ms frame and costs a nullable `RenderedFrame.metrics` threaded through the pipeline
+  and the render path. `off` hides the panel *entirely*, `coverage` and `fps` with it, so the
+  session checklist below means "not while `off`".
 - `Overlay` ports `live_draw.py` — same row order, same `--` for NaN, same colour semantics
   (coverage green/red against the gate, `up:` orange), same `sitSteadiness` reading the trunk's
   deviation from its *own* window baseline rather than an absolute upright angle.
+  **What each row means for the operator is [`OVERLAY.md`](OVERLAY.md)**, kept out of this file on
+  purpose: this one is for someone editing the chain, that one for someone reading the screen
+  mid-session. A row's units, sign or caveat changing here has to change there too.
 
 Models are fetched into `app/src/main/assets/` by the `fetchModels` Gradle task, which prefers the
 copies the Python side already cached — same URLs, same download-on-first-use, gitignored the same

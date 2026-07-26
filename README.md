@@ -177,6 +177,9 @@ are not one-time checks though — the overlay shows the things that move betwee
 - **The face redaction** — confirm a face is actually covered before pointing this at anyone. A
   fully black frame means no face was located and the app blanked it rather than risk showing one.
 
+Every other row, per mode, with units and the caveats that come with them:
+[`android/OVERLAY.md`](android/OVERLAY.md).
+
 ## TODO
 
 - [x] increase IMU sampling rate to at least 50, ideally 100 Hz — **100 Hz over USB serial, 50 Hz
@@ -234,24 +237,39 @@ are not one-time checks though — the overlay shows the things that move betwee
       app does not establish: a skeleton that looks right on screen says nothing about whether the
       GPU delegate emits the same `pose_world_landmarks` as the desktop CPU build. Until that is
       measured, an Android session is a new baseline, not a continuation of the laptop trend.
-      Build/install steps and the per-session checklist: `android/CLAUDE.md`
+      Build/install steps and the per-session checklist: `android/CLAUDE.md`. What each row on the
+      screen means: [`android/OVERLAY.md`](android/OVERLAY.md)
 - [ ] measure phone↔laptop landmark parity — record on the laptop, `pixi run export-video`, run the
       mp4 through the app and diff against the `.h5`'s `/pose/landmarks_world`, then compare the
       resulting `hold_metrics`/`crawl_metrics`, which is the figure that actually decides whether
       the two can share a trend. Needs a **file-source screen in the app**, which does not exist yet
-- [ ] add an `off` state to the Android overlay mode toggle, alongside `hold`/`crawl`, to remove all
-      metric overlays. Belongs at the app layer — `LiveMetricsComputer` requires a mode with a
-      window length — so the choice is whether to stop pushing frames (saves the recompute, but the
-      rolling window is cold on switching back) or keep pushing and simply not draw
-- [ ] document what each live overlay row means, per mode — operator-facing, not code-facing. The
-      material exists in `motor_metrics/CLAUDE.md` and the `live.py` docstrings, but written for
-      someone editing the chain rather than someone reading the screen mid-session
-- [ ] investigate intermittent black frames on Android, a fraction of a second at a time. Most
-      likely `blankWhenUnlocated` behaving exactly as designed: `FaceRedaction.redactAll` blanks the
-      **whole** frame whenever neither the pose face landmarks nor the detector locate a face, so a
-      momentary miss is a black frame. If confirmed the question is a product one — hysteresis on
-      the last known face box, or blanking only that region — and **not** "stop blanking", which
-      would show an unredacted face
+- [x] add an `off` state to the Android overlay mode toggle, alongside `hold`/`crawl`, to remove all
+      metric overlays — the toggle now cycles `hold → crawl → off`. Kept at the app layer as a pure
+      display flag (`LiveMetricsComputer` requires a mode with a window length and cannot represent
+      `off`), and of the two options it **keeps pushing frames** rather than stopping: not pushing
+      buys back a ~3 ms recompute against a 67 ms frame and costs a nullable `RenderedFrame.metrics`
+      threaded through the whole render path. So `off` hides the panel — `coverage` and `fps` with
+      it, since an `off` that leaves a panel on screen is not off. Entering `off` is also what
+      switches the kernel back to `hold`, so the window discard the cycle owes is spent while
+      nothing is drawn, and the tap back out lands on a populated readout rather than five seconds
+      of dashes
+- [x] document what each live overlay row means, per mode — `android/OVERLAY.md`, operator-facing
+      and deliberately not a section of `android/CLAUDE.md`, which is written for someone editing
+      the chain. Every row's units, direction and caveat, plus the two that are easiest to
+      misread: `trunk dev` is deviation from the window's *own* median lean and not from upright,
+      and `leg favor` is `2(L-R)/(L+R)` on a ±2 scale, so `0.67` is one leg travelling **twice** as
+      far as the other — not "67 % more", which a code comment had claimed
+- [x] investigate intermittent black frames on Android, a fraction of a second at a time. Confirmed
+      `blankWhenUnlocated`, but the trigger was narrower and more fixable than "a momentary miss":
+      `PosePipeline` ran the face detector only when **no pose was present**, while
+      `FaceRedaction.poseHeadBox` also returns nothing for a *tracked* body whose eleven face
+      landmarks are all below the visibility gate — head down or turned away, i.e. a belly crawl.
+      In that state `HYBRID`'s fallback was handed an empty detection list, nothing was redacted
+      and the frame blanked. The detector is now gated on `FaceRedaction.hasPoseFaceBox`, which
+      shares its scan with `poseHeadBox` so the two cannot disagree. Hysteresis on the last known
+      box stays unbuilt on purpose — it is a product call, to be made against the blank counter
+      `PosePipeline.noteBlanked` now logs rather than in advance — and "stop blanking" stays off
+      the table
 - [ ] investigate Android fps dipping below 15 while the overlay still reads `gpu`. The label
       reports which delegate was successfully *built* at startup, never that it is currently
       performing, so a thermally throttled GPU still reads `gpu` — rule that out first. The

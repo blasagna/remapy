@@ -135,6 +135,17 @@ class PosePipeline(
     private var smoothedFps = 0.0
 
     /**
+     * Blank-frame accounting for [noteBlanked]: consecutive blanks, and the session total.
+     *
+     * Kept after the HYBRID gate was fixed rather than removed with it, because the screen cannot
+     * distinguish a *correct* blank — nobody in frame, so nothing to redact — from the bug coming
+     * back, and both look like the video stuttering to black. A count with `hasPose` beside it
+     * separates them, and gives the next session a number instead of an impression.
+     */
+    private var blankRun = 0
+    private var blankTotal = 0L
+
+    /**
      * When the next frame is due, as a phase accumulator rather than a "time since last".
      *
      * Advancing by `max(now, nextDueMs) + period` holds phase against a faster source while still
@@ -280,9 +291,18 @@ class PosePipeline(
             val metrics = computer.push(timestampMs, frame)
 
             val hasPose = !frame.world[0].isNaN()
+            // Hoisted so the predicate below and `redact` below that cannot be handed different
+            // frames — the detector must be run for exactly the frames the pose path will fail on.
+            val poseFrame = if (hasPose) frame else null
             val detections = if (
                 redactionMethod == FaceRedaction.Method.DETECTOR ||
-                (redactionMethod == FaceRedaction.Method.HYBRID && !hasPose)
+                // Not `!hasPose`: a tracked body whose face keypoints are all below the visibility
+                // gate yields no pose head box either, and that is the case HYBRID's fallback is
+                // for. Asking the narrower question left `detections` empty exactly there, so
+                // nothing was redacted and `blankWhenUnlocated` blanked the frame — the black
+                // frames seen mid-crawl, when the head is down or turned away.
+                (redactionMethod == FaceRedaction.Method.HYBRID &&
+                    !FaceRedaction.hasPoseFaceBox(poseFrame))
             ) {
                 faceDetector.detectForVideo(held.image, timestampMs).detections()
             } else {
@@ -299,12 +319,17 @@ class PosePipeline(
             Canvas(display).drawBitmap(held.bitmap, 0f, 0f, null)
             val redacted = FaceRedaction.redact(
                 display,
-                if (hasPose) frame else null,
+                poseFrame,
                 detections,
                 redactionMethod,
                 redactionStyle,
             )
-            if (!redacted && blankWhenUnlocated) FaceRedaction.redactAll(display, redactionStyle)
+            if (!redacted && blankWhenUnlocated) {
+                FaceRedaction.redactAll(display, redactionStyle)
+                noteBlanked(hasPose, detections.size)
+            } else {
+                blankRun = 0
+            }
 
             onFrame(RenderedFrame(display, frame, metrics, updateFps()))
         } catch (e: RuntimeException) {
@@ -325,6 +350,22 @@ class PosePipeline(
                 entry.value.image.close()
                 iterator.remove()
             }
+        }
+    }
+
+    /**
+     * Record that a frame was blanked because nothing located a face.
+     *
+     * Logs once per *burst* rather than per frame: at 15 Hz a per-frame log would bury the rest of
+     * the tag, and the useful signal is that a run started and what the redaction inputs looked
+     * like when it did. `pose=true` with `detections=0` is the diagnosis — a body tracked, its face
+     * keypoints below the gate and the detector finding nothing either — while `pose=false` with an
+     * empty frame is the behaviour working as designed.
+     */
+    private fun noteBlanked(hasPose: Boolean, detectionCount: Int) {
+        blankTotal++
+        if (blankRun++ == 0) {
+            Log.i(TAG, "blanked frame: pose=$hasPose detections=$detectionCount total=$blankTotal")
         }
     }
 
@@ -364,6 +405,10 @@ class PosePipeline(
         // which would drop the first frame of the new camera for no reason and delay the first
         // readout at exactly the moment the operator is looking for it.
         nextDueMs = 0L
+        // Only the run, not the total: a lens or framing change is exactly when redaction can start
+        // failing, so the first blank after one should log rather than be swallowed by a run that
+        // began under the old view.
+        blankRun = 0
     }
 
     /**

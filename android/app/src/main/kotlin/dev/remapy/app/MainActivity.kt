@@ -76,6 +76,21 @@ class MainActivity : ComponentActivity() {
     /** Which exercise the live readout is measuring. `hold` is the common case, so it is the default. */
     private var liveMode by mutableStateOf(LiveMetricsComputer.HOLD)
 
+    /**
+     * Whether the readout is hidden — the third position of the mode toggle.
+     *
+     * Held here rather than as a third [LiveMetricsComputer] mode string, and that is the whole
+     * design. `off` is a *display* state: the pipeline keeps computing [liveMode] underneath while
+     * the panel is hidden, so the window is warm by the time it is shown again (see [toggleMode]).
+     * It also keeps `off` out of `:metrics` entirely — a mode with no window length is not
+     * something [LiveMetricsComputer] can represent, and every constructor there rejects one.
+     *
+     * The rejected alternative was to stop pushing frames instead. It buys back a ~3 ms recompute
+     * against a 67 ms frame, and costs a nullable `RenderedFrame.metrics` threaded through the
+     * pipeline and the whole render path — a worse trade than the recompute is worth.
+     */
+    private var overlayOff by mutableStateOf(false)
+
     /** Whether the *other* lens exists. Tablets and some phones have only one. */
     private var canFlipCamera by mutableStateOf(false)
 
@@ -131,6 +146,7 @@ class MainActivity : ComponentActivity() {
                         canFlipCamera = canFlipCamera,
                         onFlipCamera = ::flipCamera,
                         mode = liveMode,
+                        overlayOff = overlayOff,
                         onToggleMode = ::toggleMode,
                         portrait = portrait,
                         onToggleOrientation = ::toggleOrientation,
@@ -226,21 +242,41 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Switch the live readout between sitting/standing holds and belly-crawl.
+     * Cycle the readout: `hold` -> `crawl` -> `off` -> `hold`.
      *
-     * Only the metric dispatch changes — the camera keeps running and the models stay loaded. The
-     * readout blanks and re-warms over the next few seconds because the rolling window is
-     * discarded; see [PosePipeline.setMode] for why that is not avoidable.
+     * Only the metric dispatch changes — the camera keeps running and the models stay loaded. On
+     * the two transitions that change the *measurement*, the readout blanks and re-warms over the
+     * next few seconds because the rolling window is discarded; see [PosePipeline.setMode] for why
+     * that is not avoidable.
+     *
+     * **Entering `off` switches the pipeline back to `hold` and leaving it touches nothing.**
+     * That ordering is the point, and it is what makes `off` free rather than merely quiet. The
+     * window has to be discarded somewhere on the way round the cycle — `off` always returns to
+     * `hold`, and the two modes have different window lengths — so it is spent while the panel is
+     * *hidden*, where a re-warm costs the operator nothing to watch. Five seconds later the window
+     * is full, and the tap out of `off` is a pure display flip onto a populated readout. Doing it
+     * the other way round would put the same discard in the one place it is visible.
+     *
+     * Note this hides the whole panel, `coverage` and `fps` included — an `off` that leaves a
+     * panel on screen is not off. `android/CLAUDE.md`'s per-session checklist assumes those rows
+     * are visible, so it means "not while `off`".
      *
      * Worth knowing which mode you are in beyond the label: `crawl` reads **no vertical at all**
      * (the axis is the body's own trunk vector), which makes it the camera-robust one, while
      * `hold` inherits `WORLD_UP`'s level-camera assumption. The `up` row on the overlay says which.
      */
     private fun toggleMode() {
-        liveMode = if (liveMode == LiveMetricsComputer.HOLD) {
-            LiveMetricsComputer.CRAWL
+        if (overlayOff) {
+            // Nothing to rebuild: `hold` has been running behind the hidden panel since `off` was
+            // entered, so the readout is already there to show.
+            overlayOff = false
+            return
+        }
+        if (liveMode == LiveMetricsComputer.HOLD) {
+            liveMode = LiveMetricsComputer.CRAWL
         } else {
-            LiveMetricsComputer.HOLD
+            overlayOff = true
+            liveMode = LiveMetricsComputer.HOLD
         }
         metrics = null
         pipeline?.setMode(liveMode)

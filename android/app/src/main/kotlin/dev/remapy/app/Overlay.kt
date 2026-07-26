@@ -42,8 +42,11 @@ object Overlay {
     /** The `(label, value)` lines for this readout's mode. */
     fun rows(m: LiveMetrics): List<Row> = if (m.liveMode == LiveMetricsComputer.CRAWL) {
         // Legs lead: Remy's signal is which leg he drives with, not the arms. `leg favor` is the
-        // headline (`0.85 L` = the left leg travels 85 % more), and the per-side cadence shows the
-        // same favouring in the cycle counts.
+        // headline, and the per-side cadence shows the same favouring in the cycle counts.
+        //
+        // Read the favour number on its own scale: it is `symmetry_index`, `2(L-R)/(L+R)` over the
+        // two excursion ranges, so it runs to +-2 and **is not a percentage difference**. `0.67` is
+        // one leg travelling twice as far as the other; `2.0` is one leg not moving at all.
         listOf(
             Row("arm cad", fmt(m.liveCadenceCpm, 1, " cpm")),
             Row("leg cad", fmt(m.liveLegCadenceCpm, 1, " cpm")),

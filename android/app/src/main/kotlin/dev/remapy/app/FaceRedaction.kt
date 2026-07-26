@@ -65,9 +65,12 @@ object FaceRedaction {
         val boxes = when (method) {
             Method.POSE -> listOfNotNull(poseHeadBox(bitmap, frame))
             Method.DETECTOR -> detectorBoxes(bitmap, detections)
-            // Pose keypoints when a body is tracked (more reliable at odd angles, in profile, and
-            // for small faces), the detector otherwise — which covers close-up framing where the
-            // pose model may not fire at all.
+            // Pose keypoints when a head is located that way (more reliable at odd angles, in
+            // profile, and for small faces), the detector otherwise — which covers close-up
+            // framing where the pose model may not fire at all, *and* the case where a body is
+            // tracked but its face keypoints are occluded. The caller decides whether to run the
+            // detector from [hasPoseFaceBox]; if it asked the narrower "is a pose present"
+            // question, `detections` arrives empty here and this fallback cannot fire.
             Method.HYBRID -> listOfNotNull(poseHeadBox(bitmap, frame))
                 .ifEmpty { detectorBoxes(bitmap, detections) }
         }
@@ -81,6 +84,23 @@ object FaceRedaction {
     }
 
     /**
+     * Whether [poseHeadBox] would locate a head in [frame].
+     *
+     * Exists because the caller has to decide whether to run the face detector *before* it has a
+     * bitmap to redact, and "is a pose present" is the wrong question to ask. A pose can be tracked
+     * while every face keypoint sits below [MIN_VISIBILITY] — a child face-down mid-crawl, or one
+     * turned away — and in that state [Method.HYBRID]'s fallback is exactly what should fire.
+     * Gating the detector on pose presence instead left it holding an empty detection list in the
+     * one case it existed for, and `PosePipeline`'s `blankWhenUnlocated` turned that into a black
+     * frame.
+     *
+     * Shares [faceBounds] with [poseHeadBox] rather than repeating the gate: a second copy is how
+     * the predicate and the box would drift apart about what "located" means, and they must agree
+     * or the detector runs on the wrong frames.
+     */
+    fun hasPoseFaceBox(frame: PoseFrame?): Boolean = faceBounds(frame) != null
+
+    /**
      * Head box from the pose model's face keypoints (landmarks 0-10: nose, eyes, ears, mouth).
      *
      * No second model needed. Returns null when no pose is present or the face keypoints are below
@@ -88,6 +108,21 @@ object FaceRedaction {
      * would redact the wrong part of the frame and leave the real face showing.
      */
     private fun poseHeadBox(bitmap: Bitmap, frame: PoseFrame?): Rect? {
+        val bounds = faceBounds(frame) ?: return null
+        val w = bitmap.width
+        val h = bitmap.height
+        return paddedBounds(
+            (bounds[0] * w).toInt(), (bounds[1] * h).toInt(),
+            (bounds[2] * w).toInt(), (bounds[3] * h).toInt(),
+            w, h, PAD, TOP_PAD,
+        )
+    }
+
+    /**
+     * Normalised `[minX, minY, maxX, maxY]` over the visible face keypoints, or null when none
+     * clear [MIN_VISIBILITY]. Image fractions, so it needs no bitmap.
+     */
+    private fun faceBounds(frame: PoseFrame?): FloatArray? {
         if (frame == null) return null
         var minX = Float.MAX_VALUE
         var minY = Float.MAX_VALUE
@@ -106,13 +141,7 @@ object FaceRedaction {
             seen++
         }
         if (seen == 0) return null
-
-        val w = bitmap.width
-        val h = bitmap.height
-        return paddedBounds(
-            (minX * w).toInt(), (minY * h).toInt(), (maxX * w).toInt(), (maxY * h).toInt(),
-            w, h, PAD, TOP_PAD,
-        )
+        return floatArrayOf(minX, minY, maxX, maxY)
     }
 
     private fun detectorBoxes(bitmap: Bitmap, detections: List<Detection>): List<Rect> =
