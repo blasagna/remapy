@@ -228,9 +228,35 @@ are not one-time checks though — the overlay shows the things that move betwee
 - [ ] program feather sense in embedded Rust (embassy-nrf and nrf-hal). Use schematics from adafruit to build BSP.
 - [~] port to Android — live view only (camera + pose + live metrics, observer-facing). The metrics
       kernel is reimplemented in Kotlin and pinned to the Python one by exported goldens
-      (`pixi run export-fixtures`); the app builds, runs, and redacts. **Not yet run against a real
-      camera or a real child**, and phone-vs-laptop landmark parity is unmeasured — until it is,
-      an Android session is a new baseline, not a continuation of the laptop trend. Build/install
-      steps and what to check on a first run: `android/CLAUDE.md`
+      (`pixi run export-fixtures`). **Runs on a Pixel 10 against a real person**, in both hold and
+      crawl modes, at a sustained 15 fps with a portrait/landscape toggle and the overlay clear of
+      the punch-hole camera. What remains is **phone-vs-laptop landmark parity**, which a working
+      app does not establish: a skeleton that looks right on screen says nothing about whether the
+      GPU delegate emits the same `pose_world_landmarks` as the desktop CPU build. Until that is
+      measured, an Android session is a new baseline, not a continuation of the laptop trend.
+      Build/install steps and the per-session checklist: `android/CLAUDE.md`
+- [ ] measure phone↔laptop landmark parity — record on the laptop, `pixi run export-video`, run the
+      mp4 through the app and diff against the `.h5`'s `/pose/landmarks_world`, then compare the
+      resulting `hold_metrics`/`crawl_metrics`, which is the figure that actually decides whether
+      the two can share a trend. Needs a **file-source screen in the app**, which does not exist yet
+- [ ] add an `off` state to the Android overlay mode toggle, alongside `hold`/`crawl`, to remove all
+      metric overlays. Belongs at the app layer — `LiveMetricsComputer` requires a mode with a
+      window length — so the choice is whether to stop pushing frames (saves the recompute, but the
+      rolling window is cold on switching back) or keep pushing and simply not draw
+- [ ] document what each live overlay row means, per mode — operator-facing, not code-facing. The
+      material exists in `motor_metrics/CLAUDE.md` and the `live.py` docstrings, but written for
+      someone editing the chain rather than someone reading the screen mid-session
+- [ ] investigate intermittent black frames on Android, a fraction of a second at a time. Most
+      likely `blankWhenUnlocated` behaving exactly as designed: `FaceRedaction.redactAll` blanks the
+      **whole** frame whenever neither the pose face landmarks nor the detector locate a face, so a
+      momentary miss is a black frame. If confirmed the question is a product one — hysteresis on
+      the last known face box, or blanking only that region — and **not** "stop blanking", which
+      would show an unredacted face
+- [ ] investigate Android fps dipping below 15 while the overlay still reads `gpu`. The label
+      reports which delegate was successfully *built* at startup, never that it is currently
+      performing, so a thermally throttled GPU still reads `gpu` — rule that out first. The
+      displayed rate is also an EMA measured at *result* time, so it folds inference latency into
+      what looks like a capture-rate number; instrumenting accept-time separately would separate a
+      camera problem from an inference one
 - [ ] consider multiple camera views
 - [ ] consider adding a depth camera
