@@ -304,12 +304,12 @@ Every other row, per mode, with units and the caveats that come with them:
       box stays unbuilt on purpose — it is a product call, to be made against the blank counter
       `PosePipeline.noteBlanked` now logs rather than in advance — and "stop blanking" stays off
       the table
+- [x] default android view to portrait not landscape mode
+- [x] toggle pose on and off in the android app
+- [x] add a landing page to the android app, leaving space for recording and review of recordings in the future alongside the live view
 - [ ] investigate Android fps dipping below 15 while the overlay still reads `gpu`. The label
       reports which delegate was successfully *built* at startup, never that it is currently
       performing, so a thermally throttled GPU still reads `gpu` — rule that out first. The
       displayed rate is also an EMA measured at *result* time, so it folds inference latency into
       what looks like a capture-rate number; instrumenting accept-time separately would separate a
       camera problem from an inference one
-- [ ] default android view to portrait not landscape mode
-- [ ] toggle pose on and off in the android app
-- [ ] add a landing page to the android app, leaving space for recording and review of recordings in the future alongside the live view
