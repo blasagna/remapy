@@ -18,7 +18,7 @@ the camera, the model, or the filter chain.
 *Verification* answers this question: does the code calculate the correct value? This work is
 complete. `tests/test_motor_metrics.py` compares each metric with a known closed-form result. For
 example, it uses a constructed lean angle, the exact perimeter of a polygon, and a known sine
-frequency. At the time of this protocol, 441 tests passed. This document does not discuss code
+frequency. All 536 tests pass. This document does not discuss code
 correctness.
 
 *Validation* answers a different question: do the numbers show a real property of the movement of
