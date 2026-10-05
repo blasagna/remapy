@@ -73,8 +73,8 @@ See `adafruit_feather_sense/README.md` for the full protocol spec, `circup` list
   first cut called `StatusLED.tick(now)` from `code.py` each iteration and measured **-0.93 accel
   samples/s** (49.14 → 48.22, median 49 → 48) — of which **-0.59 was the bare guard check**, not
   the ADC read: a method call here is ~150 µs and the loop turned ~50-60×/s. Riding the battery
-  slot costs **-0.21** (median 49). Don't reintroduce a per-iteration LED call — **the rule got
-  stricter**, since the loop now turns ~100-120×/s, so any per-iteration cost roughly doubles.
+  slot costs **-0.21** (median 49). Don't reintroduce a per-iteration LED call: the shipped loop
+  turns ~100-120×/s, about twice the rate those figures were measured at, so the cost doubles too.
   The charging ramp can't ride a 0.2 Hz slot, so it takes its **own** `Telemetry` slot
   (`on_pulse=led.pulse` at 15 Hz) rather than a call in `code.py` — same rule, one more scheduled
   slot; off USB `pulse` returns on a single attribute test. Measured on the board while charging

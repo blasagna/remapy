@@ -2,7 +2,7 @@
 
 `unittest` coverage for the reusable libraries (not the CLIs). Run with `pixi run test`
 (`pixi run test-quiet` for the terse summary). Every external boundary is mocked so the suite needs
-no camera, network, model download, display, or GPU; ~480 tests run in a few seconds. Discovery is
+no camera, network, model download, display, or GPU; the full suite runs in a few seconds. Discovery is
 `python -m unittest discover -s tests -t .`, run from the repo root; `tests/` is a package
 (`__init__.py`) so `from tests.fakes import …` resolves.
 

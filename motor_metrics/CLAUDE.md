@@ -56,8 +56,8 @@ recordings (see the README references for GMFM-88 / PDMS-3 / AIMS).
 - `segments.py` — annotations → frame spans. Drops unparseable labels and anything overlapping an
   `exclude` **whole** (a hold whose middle is untrustworthy is not a shorter valid hold; trimming
   would invent a boundary). Mark two trials around the excluded stretch to keep the good parts.
-  Also carries a public `Span` (start/stop with no annotation), used by the live path — replacing
-  `crawl.py`'s private `_Span`.
+  Also carries a public `Span` (start/stop with no annotation), shared by `crawl.py` and the live
+  path.
 - `hold.py` — sitting **and** supported standing (one function; the label carries the difference).
   Duration + sway (path length, 95 % ellipse, RMS, ML/AP split, mean velocity) + trunk-angle stats.
   **`path_length_m` is duration-confounded** — a worse 20 s hold beats a better 8 s one on it; use

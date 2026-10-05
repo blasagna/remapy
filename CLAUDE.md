@@ -10,9 +10,10 @@ the invariants that constrain that code.
 
 ## Project status
 
-Early stage. "Playing with tools inspired by Remy's therapies" (per README). The dependency
-set points at computer-vision / motion work: `mediapipe`, `opencv`, `rerun-sdk` (visualization),
-plus `numpy`/`scipy`/`pandas` and `h5py` for data.
+Work in progress. Tools that motivate Remy in his physical/occupational therapy and track changes
+in his abilities (see README → Motivation): webcam capture → MediaPipe pose → face redaction →
+HDF5 recording / Rerun viewing → annotated trials → continuous motor metrics, plus an optional
+Feather Sense IMU stream.
 
 ## Packages
 
@@ -101,7 +102,7 @@ Multi-step procedures are captured as skills under `.claude/skills/` (loaded on 
 
 `tests/` holds `unittest` coverage for the reusable libraries (not the CLIs). Run with `pixi run
 test`. Every external boundary is mocked so the suite needs no camera, network, model download,
-display, or GPU; ~480 tests run in a few seconds. **Per-file test notes live in each package's nested
+display, or GPU; the full suite runs in a few seconds. **Per-file test notes live in each package's nested
 `CLAUDE.md`** (e.g. `tests/test_motor_metrics.py` and `tests/test_live.py` under `motor_metrics/`,
 `tests/test_feather.py` under `adafruit_feather_sense/`, `tests/test_viewer.py` under `rerun_viewer/`,
 `tests/test_annotate.py` under `annotate/`). Shared harness conventions:
