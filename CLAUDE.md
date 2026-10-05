@@ -52,6 +52,13 @@ Repo-wide rules that apply across packages (package-specific rules live in each 
 - **MediaPipe is the Tasks-API-only build** (0.10.35, Python 3.14): `mp.solutions.*` and
   `mediapipe.framework` are absent — use the `mediapipe.tasks.python.vision` classes; skeletons are
   drawn manually with OpenCV. Detail in `pose_estimation/` and `face_blur/`.
+- **`docs/` is written to Simplified Technical English (ASD-STE100).** The operator reads these
+  files at the mat, and STE keeps the instructions unambiguous. When you write or edit text in
+  `docs/`, follow STE: approved words with one meaning each; procedural sentences of 20 words or
+  fewer, descriptive sentences of 25 or fewer; one instruction per sentence, in the imperative and
+  active voice; no -ing verb forms, contractions, or articles left out; noun clusters of no more
+  than three words; at most six sentences per paragraph; and warnings and cautions that start with
+  a command. Code identifiers, labels, and commands are technical names, so keep them verbatim.
 
 ## Environment & commands
 
