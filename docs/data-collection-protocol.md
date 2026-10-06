@@ -1,8 +1,10 @@
 # Data Collection Protocol — Verification & Validation
 
-*remapy / motor_metrics · rev. 2026-07-24*
+*remapy / motor_metrics · rev. 2026-10-05*
 
-A single-subject measurement plan for confirming that the sitting, transition, crawl, and standing metrics reflect Remy's real movement — not artifacts of the camera, the model, or the filter chain.
+This document is a measurement plan for one subject. It shows if the sitting, transition, crawl,
+and standing metrics measure the real movement of Remy. The metrics must not show errors from
+the camera, the model, or the filter chain.
 
 | | |
 |---|---|
@@ -11,33 +13,58 @@ A single-subject measurement plan for confirming that the sitting, transition, c
 | **Design** | Single-case, repeated-measures |
 | **Reference standard** | Manual video reference (no lab hardware) |
 
-## Purpose and how to read this document
+## Purpose of this document
 
-*Verification* — does the code compute what it claims to compute — is already done: `tests/test_motor_metrics.py` checks every metric against closed-form oracles (a constructed lean angle, a polygon's exact perimeter, a known sine frequency) and 441 tests pass. That is a code-correctness question and this document is not about it.
+*Verification* answers this question: does the code calculate the correct value? This work is
+complete. `tests/test_motor_metrics.py` compares each metric with a known closed-form result. For
+example, it uses a constructed lean angle, the exact perimeter of a polygon, and a known sine
+frequency. All 536 tests pass. This document does not discuss code
+correctness.
 
-*Validation* is a different question: do the numbers that code produces reflect something real about Remy's movement? That can only be answered with data collected on purpose, and this document is the plan for collecting it.
+*Validation* answers a different question: do the numbers show a real property of the movement of
+Remy? Only data that you collect for this purpose can answer this question. This document is the
+plan for that data collection.
 
-Every published reliability figure for this class of measurement comes from group studies (n = 10–20+) using ICC, which is a between-subject statistic — it needs variance *across people* to mean anything. With one child, that tool doesn't apply. This protocol instead follows single-case experimental design (SCED) practice: repeated within-subject measurement, an explicit estimate of measurement error from repeat trials, and known-contrast checks in place of a population reference range.[^1]
+All published reliability values for this type of measurement come from group studies. These
+studies have 10–20 or more subjects, and they use the ICC. The ICC compares the variance between
+persons, so it needs more than one person. Thus, it does not apply to one child.
 
-## Three separate questions, not one
+This protocol uses the procedures of single-case experimental design (SCED).[^1] It uses these
+three methods:
 
-"Is this metric valid?" is really three questions, and a session that answers one does not automatically answer the others. Design each collection day around which question it is for.
+- Repeated measurements of the same subject.
+- An estimate of the measurement error from repeated trials.
+- Known-contrast checks, in place of a population reference range.
+
+## Three different questions
+
+The question "Is this metric valid?" contains three different questions. A session that answers
+one question does not answer the other two. Plan each collection day for one of these questions.
 
 | Question | Answered by | Applies to |
 |---|---|---|
-| **Reliability** — if nothing changed, does the number stay put? | Same-day repeat trials; report SEM & MDC<sub>95</sub> (see Reliability sub-study, below) | All metrics |
-| **Concurrent validity** — does it agree with an independent way of measuring the same thing? | A manual reference measurement collected alongside the camera (see Concurrent validity, below) | Duration, scale, trunk angle, cadence, reciprocity |
-| **Sensitivity** — does it move when something really did change? | A within-session fatigue contrast, and month-over-month trend (see Sensitivity, below) | Sway, SPARC, cadence |
+| **Reliability** — if nothing changed, does the number stay the same? | Repeat trials on the same day. Report the SEM and the MDC<sub>95</sub> (see the Reliability sub-study section). | All metrics |
+| **Concurrent validity** — does the metric agree with a different method that measures the same property? | A manual reference measurement, collected at the same time as the camera data (see the Concurrent validity section). | Duration, scale, trunk angle, cadence, reciprocity |
+| **Sensitivity** — does the metric change when the movement really changed? | A fatigue contrast in one session, and the trend from month to month (see the Sensitivity section). | Sway, SPARC, cadence |
 
-> **Known ceiling.** Sway (path length, ellipse area, RMS) has no concurrent validity check available in this protocol — there is no force plate or marker-based system at home. Treat sway numbers as the least independently confirmed family here; the Concurrent validity section gives the closest available proxy, and that is a real limitation, not an oversight (see Limitations).
+> **CAUTION:** The sway metrics (path length, ellipse area, RMS) have no concurrent validity check
+> in this protocol. There is no force plate or marker system at home. Thus, sway is the metric
+> family with the least independent confirmation. The Concurrent validity section gives the best
+> available substitute. The protocol accepts this limit. See the Limitations section.
 
-## Why this needs to be a careful protocol
+## Why this protocol must be careful
 
-Two published numbers set expectations before a single frame is recorded.
+Two published results give the expected performance before the first recording.
 
-### Even gold-standard hardware is only moderately reliable in this exact population
+### The best lab equipment is only moderately reliable in this population
 
-A study of infant sitting postural control in children with or at risk of cerebral palsy — Remy's own reference population — used a **240 Hz force plate**, three trials of 8.3 s per session, across 18 infants (mean age 13.1 months).[^2] Even with that hardware, inter-session reliability for the linear sway measures came back only moderate:
+One study examined the sitting posture control of infants with cerebral palsy (CP), or at risk of
+CP.[^2] This population is the reference population for Remy. The study used a **240 Hz force
+plate**. Each session had three trials of 8.3 s, and the study had 18 infants (mean age 13.1
+months).
+
+With this equipment, the reliability between sessions was only moderate for the linear sway
+measures:
 
 | Measure | Inter-session ICC (mean) | Range |
 |---|---:|---:|
@@ -45,55 +72,128 @@ A study of infant sitting postural control in children with or at risk of cerebr
 | RMS, medio-lateral sway | 0.55 | 0.25 – 0.70 |
 | Sway path length | 0.43 | 0.25 – 0.57 |
 
-That is the reliability ceiling with a purpose-built lab instrument. A single 30 Hz webcam should be expected to do *no better* — the honest goal of this protocol is knowing how much worse, not assuming the camera can match a force plate.
+These values are the maximum reliability of a special lab instrument. A single 30 Hz webcam will
+probably not be better. The objective of this protocol is to find how much worse the webcam is.
 
-### Landmark noise is the same order of magnitude as the signal
+### The landmark noise and the signal are approximately the same size
 
-Marker-free pose estimation compared against marker-based motion capture shows roughly 47% of landmark position errors under 20 mm, 80% under 30 mm, and about 10% exceeding 40 mm.[^3] Remy's postural sway is measured in single-digit centimeters — so landmark noise is not a rounding error next to the signal, it is on the same scale as it.
+One study compared pose estimation without markers to motion capture with markers.[^3] It found
+these landmark position errors:
 
-The meters those numbers are denominated in are themselves a model output. `landmarks_world` is metric because MediaPipe *estimates* a body scale from the pose, not because anything in the scene was calibrated — so an object of known size held in frame cannot check it (the pose landmarker emits only the 33 body points; a rod never gets coordinates, and its size constrains nothing in the model's estimate). The scale check in Concurrent validity below therefore compares the model's estimate against a tape-measured *body* dimension, which is the only reference this pipeline can actually be held to.
+- Approximately 47% of the errors were less than 20 mm.
+- Approximately 80% of the errors were less than 30 mm.
+- Approximately 10% of the errors were more than 40 mm.
 
-### The landmarks the metrics actually depend on
+The postural sway of Remy is less than 10 cm. Thus, the landmark noise is not small in comparison
+with the signal. The noise and the signal have approximately the same size.
 
-Every metric in this package reads from a fixed subset of MediaPipe's 33 body landmarks — mainly the shoulders and hips (11, 12, 23, 24), which define the trunk vector every hold and transition metric is built on, and the wrists (15, 16), which drive the crawl signal. Camera framing (below) has one job: keep all of these in frame and unoccluded for the whole trial.
+The meter values are also an output of the model. `landmarks_world` has metric units because
+MediaPipe estimates a body scale from the pose. No object in the image calibrates it.
+
+Thus, an object of known size in the frame cannot check the scale. The pose landmarker gives only
+the 33 body points. A rod in the frame gets no coordinates, and its size has no effect on the
+estimate of the model.
+
+For this reason, the scale check in the Concurrent validity section uses a body dimension. You
+measure this dimension with a tape measure. It is the only reference that this pipeline can use.
+
+### The landmarks that the metrics use
+
+All metrics in this package use a small set of the 33 body landmarks of MediaPipe:
+
+- The shoulders and the hips (11, 12, 23, 24) give the trunk vector. All hold metrics and all
+  transition metrics use the trunk vector.
+- The wrists (15, 16) give the crawl signal.
+
+The camera framing (see the next section) has one function. It must keep all of these landmarks
+in the frame, with nothing in front of them, for the full trial.
 
 ![Diagram of the 33 MediaPipe pose landmarks, numbered and labeled on a skeleton figure, from nose (0) through eye, ear, shoulder, elbow, wrist, finger, hip, knee, ankle, heel, and foot-index landmarks.](img/pose-landmarks.png)
 
-*Fig. 1 — The 33-point MediaPipe Pose landmark map. Shoulders/hips (11, 12, 23, 24) and wrists (15, 16) are load-bearing for every metric in this package. Source: Google AI Edge, [Pose landmark detection guide](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).*
+*Fig. 1 — The 33-point MediaPipe Pose landmark map. All metrics in this package use the shoulders
+and hips (11, 12, 23, 24) and the wrists (15, 16). Source: Google AI Edge,
+[Pose landmark detection guide](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker),
+licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).*
 
-## Fixed setup — identical every session
+## Fixed setup — the same in each session
 
-Every metric assumes the camera doesn't move and doesn't tilt between sessions (`signals.WORLD_UP` takes the camera's own vertical axis as "up," which is only true if the camera is level). Fix the physical setup once, mark it, and don't re-eyeball it each time.
+All metrics are correct only if the camera does not move or tilt between sessions. `signals.WORLD_UP` uses
+the vertical axis of the camera as "up". This is correct only if the camera is level. Set the
+equipment one time, mark its position, and use the marks in each session.
 
-**Level (zero pitch) is the load-bearing requirement — mounting height is not.** `WORLD_UP` depends on the camera's optical axis being horizontal, not on the camera physically sitting at any particular height. If a tripod's minimum height is above Remy's seated hip height, mount it there anyway and keep it level; he will simply sit lower in the frame. That preserves `WORLD_UP` exactly. What breaks it is tilting the camera down to re-center him in a higher-mounted frame — that pitch rotates the camera's own "up" away from true vertical by roughly the tilt angle, and every `trunk_from_vertical` reading inherits that offset. Height only matters for a smaller, secondary reason: keeping Remy near the camera's principal axis limits ordinary lens-perspective distortion toward the frame edges.
+**The level (zero pitch) is the important requirement. The height of the camera is not
+important.**
+
+- `WORLD_UP` needs a horizontal optical axis. It does not need a specified camera height.
+- If the minimum height of the tripod is above the seated hip height of Remy, use the tripod at
+  that height. Keep the camera level. Remy is then low in the frame, and `WORLD_UP` stays correct.
+- A downward tilt causes the error. If you tilt the camera down to put Remy at the center, the
+  "up" axis of the camera turns away from the true vertical. The angle of this change is
+  approximately the tilt angle. All `trunk_from_vertical` values then have this error.
+- The height has a smaller effect. When Remy is near the principal axis of the camera, the lens
+  causes less distortion. The distortion increases near the edges of the frame.
 
 ```mermaid
 flowchart LR
     subgraph TopDown [Top-down]
         direction LR
-        C1["Camera<br/>on tape mark"] -->|"2.2-2.6 m, centered on mat"| K1["Remy<br/>centered on mat"]
+        C1["Camera<br/>on tape mark"] -->|"2.2-2.6 m, centered on mat"| K1["Remy<br/>at center of mat"]
     end
     subgraph SideElevation [Side elevation]
         direction TB
-        C2["Camera at tripod's<br/>minimum height"] --> D{"Optical axis<br/>level? (0 degrees pitch)"}
-        D -->|"yes - recommended"| K2["Remy may sit low<br/>in frame. WORLD_UP<br/>stays valid."]
-        D -->|"no - tilted down<br/>to re-center Remy"| K3["Biases every<br/>trunk-angle reading.<br/>Avoid."]
+        C2["Camera at minimum<br/>tripod height"] --> D{"Optical axis<br/>level? (0 degrees pitch)"}
+        D -->|"yes - use this"| K2["Remy can be low<br/>in frame. WORLD_UP<br/>stays correct."]
+        D -->|"no - tilted down<br/>to put Remy at center"| K3["Error in all<br/>trunk-angle values.<br/>Do not do this."]
     end
 ```
 
-*Fig. 2 — Fixed camera geometry (schematic, not to scale). Mount at whatever height the tripod allows; the branch that matters is whether the optical axis stays level, not the physical height. Mark camera and mat position with floor tape so distance and framing repeat exactly across sessions; check level with a bubble level or phone level app before every recording, since `trunk_from_vertical` assumes it.*
+*Fig. 2 — Fixed camera geometry (schematic, not to scale). Use the height that the tripod gives.
+The important condition is a level optical axis. The physical height is not important.*
 
-- [ ] **Camera level** — check with a bubble level or phone level app resting on the camera body, every session, before recording. This is the single assumption every trunk-angle and sway number depends on, independent of mounting height.
-- [ ] **Fixed distance** — mark camera and child positions with floor tape (Fig. 2) so framing, and therefore `com_norm` speed scaling, stays comparable across sessions. If a taller tripod pushes the camera well above hip height, increasing this distance shrinks the framing problem — the offset between camera height and Remy's torso height subtends a smaller angle from farther away — which is the fix to reach for before ever tilting the camera.
-- [ ] **Full-body framing check** — at your fixed height and distance, confirm shoulders, hips, and both wrists sit inside the frame with margin, even with Remy sitting lower (or higher) than center. This is what a taller-than-ideal mount actually costs — a framing constraint, not a validity one.
-- [ ] **Same surface and lighting** — same mat, same room, similar time of day, to keep visibility/presence scores comparable rather than confounding "worse tracking" with "different room."
-- [ ] **Body-scale reference — measured off-camera, not held in frame.** With a tape measure, record Remy's shoulder width (acromion to acromion) and hip width in the session notes; re-measure monthly, since he is growing and a stale number would read as scale drift. This is what the scale check in Concurrent validity compares against. Nothing goes in the frame for it — the check runs offline against the `calib` segment.
+*Mark the camera and mat positions with floor tape. Then the distance and framing are the same
+in all sessions. Before each recording, use a bubble level or a phone level app to make sure that the
+camera is level. `trunk_from_vertical` needs a level camera.*
 
-> **If a fixed tilt is truly unavoidable,** measure it precisely (protractor or level app, not by eye) and reproduce that *exact* angle every session — a tripod head without an angle detent makes this harder than it sounds, and an inconsistent tilt turns a one-time bias into session-to-session noise, which is worse for trend detection than a constant offset would be. Do not lean on `signals.estimate_up()` to correct for it: that function cannot distinguish "the camera is tilted" from "Remy isn't sitting vertically," and for a child with a developmental delay the second possibility isn't negligible — using it here would reintroduce the exact confound this setup is designed to avoid. Increasing distance (above) is the lower-risk fix.
+- [ ] **Camera level** — Before each recording, put a bubble level or a phone level app on the
+      camera body. All trunk-angle values and sway values need a level camera.
+      This is true at all mounting heights.
+- [ ] **Fixed distance** — Mark the camera position and the child position with floor tape
+      (Fig. 2). Then the framing and the `com_norm` speed scale stay the same in all sessions.
+      If a tall tripod puts the camera much higher than the hips of Remy, increase the distance.
+      At a larger distance, the height difference causes a smaller angle. Use this solution
+      before you tilt the camera.
+- [ ] **Full-body framing check** — Use your fixed height and distance. Make sure that the
+      shoulders, the hips, and the two wrists are in the frame with a margin. Do this check also
+      when Remy is low or high in the frame. A tall mount causes only this framing limit. It does
+      not cause a validity problem.
+- [ ] **Same surface and light** — Use the same mat and the same room, at an equivalent time of
+      day. Then a change in the visibility scores or presence scores shows a change in tracking,
+      not a change of room.
+- [ ] **Body-scale reference** — Measure the body away from the camera. Do not hold an object in
+      the frame. Use a tape measure to measure the shoulder width of Remy (acromion to acromion)
+      and his hip width. Write the values in the session notes. Measure again each month,
+      because Remy grows. An old value would look like a scale drift. The scale check in the
+      Concurrent validity section uses these values. The software does this check later, with
+      the `calib` segment.
+
+> **CAUTION:** Do not tilt the camera if you can prevent it. If a tilt is necessary, measure the
+> tilt angle accurately with a protractor or a level app. Do not estimate it by eye. Use the same
+> angle in each session.
+>
+> A tripod head without an angle stop makes this difficult. A tilt that changes between sessions
+> causes noise between sessions. For trend detection, this noise is worse than a constant offset.
+>
+> Do not use `signals.estimate_up()` to correct a tilt. This function cannot find the difference
+> between a tilted camera and a child who does not sit vertically. A child with a developmental
+> delay can sit at an angle. Thus, this function adds the problem that this setup must prevent. A
+> larger distance (see the Fixed distance item) is the better solution.
 
 ## Session structure
 
-Every session opens with a calibration segment and then repeats each exercise type in short blocks with rest — mirroring the three-trials-per-type design used in the infant CP sitting study cited above, which is the closest published precedent for this exact population.
+Each session starts with a calibration segment. Then, for each exercise type, the session has
+short blocks of trials, with rest between the trials. The infant CP sitting study (see the
+previous section) used three trials for each type. That study is the published study nearest to
+this population, so this protocol uses the same design.
 
 ```mermaid
 flowchart LR
@@ -106,86 +206,185 @@ flowchart LR
     C3 --> N["Next exercise type"]
 ```
 
-*Fig. 3 — Session structure for one exercise type; repeat for each of the four exercise types, order rotated session to session. Trial length varies by exercise: sitting/standing holds run until Remy loses interest or posture, transitions and crawl bouts are naturally short. Rest between trials is unhurried — this is not a timed clinical exam.*
+*Fig. 3 — Session structure for one exercise type. Do this for each of the four exercise types.
+Change the sequence of the types in each session. The trial length is different for each
+exercise.*
 
-- **Always start with `calib;pose=upright`** — this is the vertical-reference diagnostic the notebook checks before trusting any hold number (see Data quality gates, below). Skipping it on a "quick" session is the single most common way to silently invalidate a day's data.
-- **Three trials per exercise type, per session**, matching the infant-CP sitting study design cited above. If Remy tires before three, record what you get and note it — a two-trial day is still usable, just wider in its error estimate.
-- **Rotate exercise order across sessions** (sit → stand → transition → crawl one day, crawl → sit → transition → stand the next) so fatigue doesn't systematically penalize whichever exercise is always last.
-- **Label immediately, in the vocabulary** — `sit_hold;arms=free;support=none`, not free text. A typo surfaces in `metrics_table()`'s `warnings` column, but only if the label was structured enough to be checked at all.
+*A sitting hold or a standing hold continues until Remy stops or loses the posture.
+Transitions and crawls are short. Do not hurry the rest between trials. This is not a timed
+clinical test.*
 
-## Reliability sub-study — estimating measurement error
+- **Always start with `calib;pose=upright`.** The notebook uses this segment as the vertical
+  reference before you use a hold number (see the Data quality gates section).
 
-Run this as a focused three-week block before leaning on the metrics for a longitudinal trend. The goal is a number for how much a metric can move *with nothing real going on*, so that later, a real change can be told apart from noise.
+  > **WARNING:** Record the calibration in each session, also in a short session. If you do not
+  > record it, you cannot use the data from that day.
+
+- **Do three trials of each exercise type in each session.** The infant CP sitting study used the
+  same number. If Remy is tired before the third trial, record the trials that you have. Write a
+  note about it. A day with two trials is satisfactory, but the error estimate is larger.
+- **Change the exercise sequence in each session.** For example, use sit → stand → transition →
+  crawl on one day. Then use crawl → sit → transition → stand on the next day. Thus,
+  fatigue does not always have an effect on the same exercise.
+- **Use the label vocabulary immediately.** For example, type `sit_hold;arms=free;support=none`.
+  Do not type free text. The `warnings` column of `metrics_table()` shows a spelling error. But it
+  can find the error only in a structured label.
+
+## Reliability sub-study — estimate the measurement error
+
+Do this three-week block before you use the metrics for a long-term trend. The objective is a
+number for the change in a metric when no real change occurs. Then you can identify a real change
+later, because it is larger than the noise.
 
 ### Schedule
 
-Two sessions per day, separated by at least two hours (e.g., late morning and late afternoon), on 3 days per week for 3 weeks — nine same-day pairs in total. Same-day pairing holds developmental change effectively constant, so any difference between the morning and afternoon session is measurement error, not Remy.
+1. Do two sessions each day, with a minimum of two hours between them. For example, do one late
+   in the morning and one late in the afternoon.
+2. Do this on 3 days each week for 3 weeks. This gives nine same-day pairs.
 
-### Analysis — adapted for n = 1
+Remy does not develop much in one day. Thus, the difference between the morning session and the
+afternoon session is measurement error. It is not a change in Remy.
 
-> **Why not ICC.** The classic reliability coefficient (ICC) is a ratio of between-subject variance to total variance — it requires variance *across people*, which doesn't exist with one child. Use the within-subject form instead, which is exactly what the repeated trials give you directly.
+### Analysis for n = 1
 
-1. For each metric, pool the repeat trials within a same-day pair (or across all three trials in a block) and compute the **within-day standard deviation**, `SD_within`.
-2. **Standard error of measurement:** `SEM = SD_within` (no reliability-coefficient correction needed — this *is* the direct estimate of trial-to-trial noise).
-3. **Minimum detectable change:** `MDC95 = 1.96 × √2 × SEM` — the smallest change between two sessions that is more likely real than noise, at 95% confidence.[^4]
-4. Report `SEM` and `MDC95` per metric, not a single pooled number — sway and cadence do not share a noise floor.
+> **NOTE:** Do not use the ICC. The ICC divides the variance between subjects by the total
+> variance. Thus, it needs more than one subject. Use the within-subject method. The repeated
+> trials give the data for this method directly.
 
-Until this sub-study is complete, treat any single session-to-session change smaller than the infant-CP study's own inter-session spread (the inter-session ICC table, above) as provisionally within noise — that is the best available prior for the size of measurement error at this population's sway magnitudes, ahead of Remy's own `MDC95` being computed.
+1. For each metric, put together the repeat trials in a same-day pair. You can also use all three
+   trials in a block. Calculate the **standard deviation in one day**, `SD_within`.
+2. Calculate the **standard error of measurement**: `SEM = SD_within`. Do not apply a correction
+   with a reliability coefficient. This value is the direct estimate of the noise between trials.
+3. Calculate the **minimum detectable change**: `MDC95 = 1.96 × √2 × SEM`.[^4] This value is the
+   smallest change between two sessions that is probably real. The confidence level is 95%.
+4. Report `SEM` and `MDC95` for each metric. Do not report one combined number. Sway and cadence
+   do not have the same noise level.
 
-## Concurrent validity — an independent check per metric family
+Until this sub-study is complete, use the inter-session spread of the infant CP study as the
+noise limit. This spread is in the ICC table in the previous section. If a change between two
+sessions is smaller than this spread, it is probably noise. This is the best estimate of the
+measurement error for these sway values, until you calculate the `MDC95` of Remy.
 
-No home force plate or marker system exists, so "independent" here means a manual reference a person can produce from the same video — coarser than a lab instrument, but genuinely independent of the pose-estimation pipeline being validated.
+## Concurrent validity — an independent check for each metric family
+
+There is no force plate or marker system at home. Thus, "independent" in this section means a
+manual reference. A person makes this reference from the same video. It is less accurate than a
+lab instrument. But it does not use the pose-estimation pipeline, so it is independent.
 
 | Metric family | Reference standard | Agreement check |
 |---|---|---|
-| `duration_s` | Stopwatch or video-timestamp read by eye at in/out points | Should match within one frame (33 ms); a sanity check more than a validity test |
-| Metric scale (underlies every sway number) | Tape-measured shoulder width from the session notes (Fixed setup checklist, above) | Compare it against the median distance between landmarks 11 and 12 in `landmarks_world` over the `calib` segment. What matters is that the ratio *stays put* across sessions — a step change means MediaPipe re-scaled Remy between sessions, and that session's meter-denominated numbers are not comparable to the rest (angles and ratios are unaffected) |
-| `trunk_angle_mean_deg` | Freeze a frame from the `calib` segment; measure trunk angle from vertical with a protractor or inclinometer app on the still image | Should agree with `trunk_from_vertical` to within a few degrees |
-| Postural sway (path length, ellipse, RMS) | *No home reference standard exists.* Closest proxy: a second phone camera at a different angle, sway magnitude compared qualitatively (bigger/smaller), not numerically | Confirms sway isn't a single-camera artifact; does not validate the absolute magnitude (see Limitations, below) |
-| `cadence_cpm` (crawl) | A rater counts arm-pulls by eye from the recorded video (a stopwatch and tally, or scrubbing frame-by-frame in `annotate`) | Manual count × 60 / trial seconds should track `cadence_cpm_left` / `_right` within a pull or two |
-| `phase_offset` (crawl reciprocity) | A rater categorizes the same clip by eye: reciprocal (alternating), symmetric ("bunny" haul), or mixed | `phase_offset` should sit near 0.5 for rater-labeled "reciprocal" clips and near 0.0 for "symmetric" ones |
-| `sparc_trunk` (transition smoothness) | *No independent smoothness reference exists* in this or any published protocol — SPARC's value is deliberately self-referential (discussed above, and see `motor_metrics/transition.py`) | Use the known-contrast design under Sensitivity, below, instead of a concurrent reference |
+| `duration_s` | A stopwatch, or a person reads the video timestamp at the in and out points | Must agree within one frame (33 ms). This is a sanity check more than a validity test. |
+| Metric scale (all sway numbers use it) | The shoulder width from the session notes, measured with a tape measure (see the Fixed setup checklist) | Compare it with the median distance between landmarks 11 and 12 in `landmarks_world` during the `calib` segment. The ratio must *stay the same* across sessions. A sudden change shows that MediaPipe changed the scale of Remy. The meter values of that session then do not compare with other sessions. Angles and ratios do not change. |
+| `trunk_angle_mean_deg` | Freeze a frame from the `calib` segment. Measure the trunk angle from vertical on the image with a protractor or an inclinometer app. | Must agree with `trunk_from_vertical` within a few degrees. |
+| Postural sway (path length, ellipse, RMS) | *There is no reference standard at home.* The best substitute is a second phone camera at a different angle. Compare the sway size qualitatively (larger or smaller), not as a number. | This shows that the sway is not an error of one camera. It does not validate the absolute size (see the Limitations section). |
+| `cadence_cpm` (crawl) | A person counts the arm pulls in the recorded video, with a stopwatch and a tally or frame by frame in `annotate`. | The manual count × 60 / trial seconds must agree with `cadence_cpm_left` / `_right` within one or two pulls. |
+| `phase_offset` (crawl reciprocity) | A person puts the same video clip into one of three groups: reciprocal (alternating), symmetric ("bunny" haul), or mixed. | `phase_offset` must be near 0.5 for "reciprocal" clips and near 0.0 for "symmetric" clips. |
+| `sparc_trunk` (transition smoothness) | *There is no independent smoothness reference* in this protocol or in published protocols. SPARC compares only with itself (see `motor_metrics/transition.py`). | Use the known-contrast design in the Sensitivity section. Do not use a concurrent reference. |
 
-Do the scale and trunk-angle checks on the **first session of every reliability block** at minimum — both are cheap, and both run offline off the `calib` segment. A tilted camera biases every trunk-angle and sway number; a shifted metric scale breaks the comparability of the sway family specifically, which is the one family that carries units.
+Do the scale check and the trunk-angle check in the first session of each reliability block, as a
+minimum. These two checks are fast, and the software does them later with the `calib` segment.
 
-## Sensitivity — confirming a metric moves when something real changes
+- A tilted camera causes an error in all trunk-angle values and sway values.
+- A change in the metric scale stops the comparison of the sway values between sessions. Sway is
+  the only metric family that has units.
 
-Reliability (the sub-study above) asks whether a metric is *stable* under nothing; sensitivity asks whether it *responds* to something. Two designs, on two timescales.
+## Sensitivity — make sure that a metric changes when the movement changes
 
-### Short timescale: within-session fatigue contrast
+The reliability sub-study shows if a metric *stays the same* when nothing changes. The sensitivity
+check shows if the metric *changes* when something changes. Use two designs, on two time scales.
 
-Compare trial 1 against trial 3 within the same session block. Some real, expected change should show up — e.g. sway increasing, or SPARC smoothness degrading, toward the end of a block as Remy tires. If a metric never separates trial 1 from trial 3 across many sessions, either it is insensitive at the resolution this setup can measure, or fatigue genuinely isn't showing up in that exercise — worth distinguishing, not assuming.
+### Short time scale: fatigue in one session
 
-### Long timescale: month-over-month trend against informal PT report
+Compare trial 1 with trial 3 in the same block. Expect a real change when Remy becomes tired. For
+example, the sway can increase, or the SPARC smoothness can decrease, at the end of the block.
 
-There is no independent quantitative score to calibrate against (no PT-administered GMFM series exists for Remy currently — see `CLAUDE.md`). Treat this as a soft check, not a statistical test: when his PT or you independently notice a change in ability, look at whether the trend in the relevant metric (duration, sway, cadence) moved in the same direction over the same window. Agreement is reassuring; disagreement is a prompt to look at coverage/QC (Data quality gates, below) before doubting the metric.
+A metric can show no difference between trial 1 and trial 3 in many sessions. There are two
+possible causes:
 
-## Data quality gates — check every session before trusting it
+- The metric is not sensitive at the resolution of this setup.
+- The exercise does not cause fatigue.
 
-These mirror the gating already built into the code (`motor_metrics.quality`, `Gate(min_visibility=0.5, min_presence=0.5)`) — this section is what a person checks by eye, not a restatement of what the code already enforces automatically.
+Find which cause is correct. Do not guess.
 
-- [ ] **Coverage ≥ 0.8** per trial. Below that, the trial's `coverage` column in `metrics_table()` is telling you MediaPipe lost the torso for more than a fifth of the clip — treat the numbers as provisional, and consider a re-shoot rather than a re-analysis.
-- [ ] **`tracked_s` close to `duration_s`**. A big gap means the longest good tracking run inside the marked trial was much shorter than what you marked — usually an occlusion (an arm crossing the torso, someone's hand assisting) mid-trial.
-- [ ] **`warnings` column is empty.** Anything there is a label typo (`label_warnings()`) — fix the annotation before treating the row as clean data, not after.
-- [ ] **Calibration diagnostic near zero.** The notebook's vertical-reference check (median trunk angle over the `calib` segment) should sit close to 0°. If it doesn't, the camera was tilted for that whole session — re-level before the next one, and treat that session's trunk-angle and sway numbers as biased by an unknown, uncorrected tilt.
+### Long time scale: the monthly trend and the reports of the physical therapist
 
-> **Discard, don't salvage.** If coverage is below 0.5, or an `exclude`-worthy interruption happened mid-trial, mark the segment `exclude;reason=...` and re-shoot rather than trying to trim around it — `segments.py` deliberately drops a trial that overlaps an exclusion whole, because a hold whose middle is untrustworthy is not a shorter valid hold.
+There is no independent numerical score for calibration. Remy does not have a series of GMFM
+scores from a physical therapist (see `motor_metrics/AGENTS.md`). Use this check as an
+approximate check, not as a statistical test.
+
+1. Wait until his physical therapist or you see a change in his ability.
+2. Look at the trend of the related metric (duration, sway, or cadence) during the same period.
+3. Make sure that the trend moved in the same direction.
+
+If the trend agrees, the metric is probably correct. If it does not agree, first examine the
+coverage and quality data (see the Data quality gates section). Then examine the metric.
+
+## Data quality gates — do these checks in each session before you use the data
+
+The code already has quality gates (`motor_metrics.quality`,
+`Gate(min_visibility=0.5, min_presence=0.5)`). These checks agree with the code gates. A person
+does these checks by eye. This section does not repeat the automatic checks of the code.
+
+- [ ] **Coverage ≥ 0.8** for each trial. A lower `coverage` value in `metrics_table()` shows a
+      problem. MediaPipe did not find the torso for more than 20% of the clip. Then the numbers are only
+      approximate. Record the trial again. Do not try to analyze it again.
+- [ ] **`tracked_s` is near `duration_s`.** A large difference shows that the longest good
+      tracking run was much shorter than the marked trial. Usually, something blocked the camera
+      during the trial. For example, an arm went across the torso, or a person helped with a hand.
+- [ ] **The `warnings` column is empty.** A value in this column shows an error in a label
+      (`label_warnings()`). Correct the annotation before you use the row.
+- [ ] **The calibration result is near zero.** The vertical-reference check of the notebook gives
+      the median trunk angle during the `calib` segment. This angle must be near 0°. If it is
+      not, the camera had a tilt for that full session. Make the camera level before the next
+      session. The trunk-angle values and sway values of that session have an unknown error from
+      the tilt.
+
+> **CAUTION:** Do not try to repair a bad trial. If the coverage is less than 0.5, mark the
+> segment `exclude;reason=...` and record the trial again. Do the same if an interruption occurs
+> during the trial.
+>
+> `segments.py` removes all of each trial that touches an `exclude` segment. It does not cut the
+> bad part from the trial. A hold with a bad middle part is not a shorter good hold.
 
 ## Data management
 
-- **File naming:** `YYYY-MM-DD_HHMM_<setupid>.h5` — the setup id changes only if the camera is physically relocated, so it flags any session that used a different geometry from Fig. 2.
-- **Keep every raw `.h5`, forever.** Metrics are recomputed on read, never written back (the same rule `recording/recorder.py` already follows) — so a future change to `derive.py`'s filter constants can be re-run against the full history instead of orphaning it.
-- **Record the code version** (git commit hash) alongside every batch of exported metrics. `SPARC` and sway velocity are only comparable across sessions computed through an identical filter chain — if the constants in `derive.py` ever change, that is a hard break in comparability, and the commit hash is what lets you tell which side of the break a number is on.
-- **Log the reliability sub-study's raw repeat trials separately** from the ongoing trend sessions, so re-deriving `SEM`/`MDC95` later doesn't require re-sorting the whole archive by hand.
+- **File name:** `YYYY-MM-DD_HHMM_<setupid>.h5`. The setup id changes only when you move the
+  camera to a different position. Thus, the setup id shows each session that used a geometry
+  different from Fig. 2.
+- **Keep all raw `.h5` files.** Do not delete them. The software calculates the metrics each time
+  that it reads a file. It does not write them back to the file. `recording/recorder.py` uses
+  the same rule. After a change to the filter constants in `derive.py`, you can calculate all old
+  sessions again.
+- **Write the code version (git commit hash) with each set of exported metrics.** You can compare
+  `SPARC` and sway velocity only when the same filter chain calculated them. A change to the
+  constants in `derive.py` stops the comparison. The commit hash shows if a number is from before
+  or after the change.
+- **Keep the raw repeat trials of the reliability sub-study apart from the usual trend sessions.**
+  Then you can calculate `SEM` and `MDC95` again later, without a manual sort of all files.
 
-## Limitations, stated plainly
+## Limitations
 
-- **n = 1.** Nothing here generalizes to other children; every inference is about Remy specifically, against his own baseline.
-- **No lab-grade reference for sway.** The infant-CP force-plate figures (cited above) are the closest available context for what "good" reliability looks like in this population, not a number this setup is expected to match.
-- **The metric scale is a model estimate, not a calibration.** The meters in `landmarks_world` come from MediaPipe inferring Remy's body size from the pose; a single-camera recording contains no scene calibration, and no in-frame object can supply one. The body-dimension check above detects *drift* in that estimate between sessions — it cannot establish absolute accuracy, and no home-available method can. Metrics that are ratios or angles (`trunk_angle_*`, `phase_offset`, `cadence_cpm`, `sparc_trunk`) do not depend on it; the sway family does.
-- **SPARC has no external ground truth**, here or in the published literature — it is validated as an internally consistent, noise-robust-up-to-a-point measure (discussed above), never as an absolute score. The known-contrast design under Sensitivity is the only validity evidence this metric family can produce.
-- **Camera-only.** The Feather Sense IMU is out of scope for this phase (see `CLAUDE.md`) — no independent inertial cross-check on sway or trunk angle is available yet.
-- **Manual reference standards have their own error.** A human counting arm-pulls by eye or reading a protractor off a paused frame is not error-free either — treat the Concurrent validity checks as bounding gross disagreement, not certifying precision.
+- **n = 1.** These results do not apply to other children. All conclusions are about Remy and his
+  own baseline.
+- **There is no lab-grade reference for sway.** The force-plate values of the infant CP study give
+  the best context for good reliability in this population. This setup does not have to give the
+  same values.
+- **The metric scale is an estimate of the model. It is not a calibration.**
+  - MediaPipe estimates the body size of Remy from the pose. The meter values in
+    `landmarks_world` come from this estimate.
+  - A recording from one camera has no calibration, and an object in the frame cannot give one.
+  - The body-dimension check finds a *drift* in the estimate between sessions. It cannot show the
+    absolute accuracy. No method at home can show it.
+  - Ratios and angles (`trunk_angle_*`, `phase_offset`, `cadence_cpm`, `sparc_trunk`) do not use
+    the scale. The sway metrics use it.
+- **SPARC has no external reference**, in this protocol or in published studies. SPARC is
+  consistent with itself, and it resists noise up to a limit. It is not an absolute score. The
+  known-contrast design in the Sensitivity section is the only validity data for SPARC.
+- **The protocol uses only the camera.** The Feather Sense IMU is not in this phase (see
+  `motor_metrics/AGENTS.md`). Thus, there is no inertial check of the sway or the trunk angle.
+- **The manual reference standards also have errors.** A person who counts arm pulls or reads a
+  protractor on a frozen frame can make errors. Use the concurrent validity checks to find large
+  disagreements. They do not prove precision.
 
 ## References
 

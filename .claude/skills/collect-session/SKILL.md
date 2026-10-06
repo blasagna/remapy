@@ -6,11 +6,12 @@ description: The data-collection runbook — capture a recording, eyeball pose-q
 # Collect and label a therapy session
 
 The end-to-end pipeline that turns a live capture into labeled trials the `motor_metrics` package can
-measure. Each step is an existing CLI; the detail behind each lives in that package's `CLAUDE.md`.
+measure. Each step is an existing CLI; the detail behind each lives in that package's `AGENTS.md`.
 
-> **Review note:** this runbook is synthesized from the existing `recording` → `annotate` →
-> `motor_metrics` CLIs, not from an external clinical protocol. Correct the trial-marking guidance to
-> match how sessions are actually administered.
+This skill covers the CLI mechanics. How a session is administered (camera setup, the calibration
+segment recorded first and labeled `calib;pose=upright`, trial order and counts, the exact label for
+each trial, quality gates) is in `docs/data-collection-runbook.md`, with the reasoning in
+`docs/data-collection-protocol.md`. Where the two differ, follow the runbook.
 
 ## 1. Record
 
@@ -48,12 +49,14 @@ pixi run annotate session.hdf5
 ### Label vocabulary
 
 Labels are free text following `exercise[;key=value]*` (parsed read-side only, in
-`motor_metrics.labels`). Examples:
+`motor_metrics.labels`, whose `EXERCISES` and `PARAMS` are the full vocabulary). Examples:
 
 - `sit_hold;arms=free;gmfm=23`
 - `sit_hold;arms=prop`
-- `crawl;side=left`
-- `supported_stand`
+- `stand_hold;support=furniture`
+- `crawl;style=belly;dir=away`
+- `transition;from=prone;to=sit;side=left`
+- `calib;pose=upright`
 
 `arms=free`, `side=`, `gmfm=` etc. are **assertions in the label**, not detections. Watch spelling —
 a typo like `arms=freee` becomes its own `groupby` bucket and silently splits a baseline (it surfaces

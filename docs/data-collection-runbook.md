@@ -2,214 +2,257 @@
 
 *remapy / motor_metrics · operator's guide*
 
-A step-by-step, follow-at-the-mat companion to
-[`data-collection-protocol.md`](data-collection-protocol.md). The protocol explains *why*;
-this runbook is the *what to do, in order*. Trial labels below are the exact vocabulary
-from `motor_metrics/labels.py` — type them verbatim (structured, not free text).
+Use this runbook at the mat. It gives the steps in their correct sequence. The
+[`data-collection-protocol.md`](data-collection-protocol.md) file gives the reasons for the steps.
+
+The trial labels in this runbook are the vocabulary from `motor_metrics/labels.py`. Type each
+label exactly as this runbook shows it. Do not type free text.
 
 ---
 
-## 0. One-time setup — redo only if the camera moves
+## 0. Setup — do one time, and again only if the camera moves
 
-1. **Place the mat and camera on floor-tape marks.** Camera **2.2–2.6 m** from the center
-   of the mat, centered on it. Tape both positions so the geometry repeats every session.
-   Assign this geometry a `setupid` (e.g. `livingroom1`) for filenames.
-2. **Mount the camera at the tripod's minimum height and make it *level*.** Level (0° pitch)
-   is the only load-bearing requirement — height is not. Do **not** tilt the camera down to
-   re-center Remy; a tilt biases every trunk-angle and sway number. If he sits too low in the
-   frame, either accept it or move the camera *farther* back — never tilt.
-3. **Framing check:** confirm both shoulders, both hips, and **both wrists** stay in frame
-   with margin, even with Remy sitting lower than center. Those landmarks (11, 12, 23, 24 +
-   15, 16) drive every metric.
+1. **Put the mat and the camera on floor-tape marks.** Put the camera 2.2–2.6 m from the center
+   of the mat. Align the camera with the center of the mat. Put tape at the two positions, so that
+   each session uses the same geometry. Give this geometry a `setupid` (for example,
+   `livingroom1`). Use the `setupid` in the file names.
+2. **Attach the camera at the minimum height of the tripod.** Make the camera *level* (0° pitch).
+   The level is the only important requirement. The height is not important.
 
----
+   > **CAUTION:** Do not tilt the camera down to put Remy at the center of the frame. A tilt
+   > adds an error to each trunk-angle number and each sway number. If Remy is too low in the
+   > frame, accept it, or move the camera farther back.
 
-## 1. Every session — fixed pre-flight (~5 min)
-
-Do these **in order, every time**, before Remy is on the mat:
-
-1. **Check camera level** with a bubble level or phone level app resting on the camera body.
-   This is the single assumption every trunk-angle and sway number depends on.
-2. **Confirm tape positions** — camera and mat on their marks; same mat, same room, similar
-   time of day, similar lighting.
-3. **Body-scale reference (monthly, off-camera):** if it's been a month since the last one,
-   tape-measure Remy's **shoulder width (acromion to acromion)** and **hip width** and write
-   them in the session notes. Nothing is held in frame — the scale check runs offline, against
-   the distance between landmarks 11 and 12 in `landmarks_world` over the `calib` segment.
-   (Earlier revisions asked for a known-length rod in frame; that check was never performable —
-   MediaPipe's pose landmarker emits only the 33 body landmarks, so a rod gets no coordinates.)
-4. **Start recording with a live view:**
-   `pixi run rerun --record YYYY-MM-DD_HHMM_<setupid>.h5`. This spawns the Rerun viewer so you
-   can **see the camera feed and skeleton overlay live** — use it to confirm framing, camera
-   level, and that all the load-bearing landmarks (shoulders, hips, both wrists) are tracked
-   before Remy starts a trial. The `--record` flag writes the HDF5 recording alongside; with no
-   `--save`/`--record-video` it's **HDF5 only** — no `.rrd`, no mp4. Faces are blurred by
-   default. Keep the recording rolling continuously through the whole session; you segment it
-   afterward in `annotate`, not during capture.
-
-   > `pixi run record` also produces the same HDF5 but has **no on-screen view** to check
-   > framing against — prefer the `rerun` form above whenever you have a display.
+3. **Do a check of the frame.** Make sure that the two shoulders, the two hips, and the two wrists
+   stay in the frame with a margin. Do this check with Remy at a low position in the frame. All
+   metrics use these landmarks (11, 12, 23, 24, 15, 16).
 
 ---
 
-## 2. Calibration segment — always first (~10 s)
+## 1. Checks before each session (approximately 5 min)
 
-Have Remy sit or stand **as upright as he comfortably can, still, facing the camera** (front
-view, same as the holds), for about 10 seconds. This is the vertical-reference diagnostic the
-notebook checks before trusting any hold number.
+Do these steps in this sequence before Remy goes on the mat. Do them in each session.
 
-> **Skipping calibration is the #1 way to silently invalidate a whole day.** Do it every
-> session. Later you'll label this segment **`calib;pose=upright`**.
+1. **Make sure that the camera is level.** Put a bubble level or a phone level app on the camera
+   body. All trunk-angle numbers and sway numbers are correct only when the camera is level.
+2. **Make sure that the camera and the mat are on their tape marks.** Use the same mat and the
+   same room. Use an equivalent time of day and equivalent light.
+3. **Measure the body dimensions one time each month.** Do this measurement away from the camera.
+   1. Use a tape measure to measure the shoulder width of Remy, from acromion to acromion.
+   2. Measure his hip width.
+   3. Write the two dimensions in the session notes.
+
+   Do not hold an object in the frame for this check. The software does the scale check later.
+   It compares your dimensions with the distance between landmarks 11 and 12 in
+   `landmarks_world` during the `calib` segment.
+4. **Start the recording with a live view.** Type this command:
+
+   `pixi run rerun --record YYYY-MM-DD_HHMM_<setupid>.h5`
+
+   1. Look at the camera image and the skeleton in the Rerun viewer.
+   2. Make sure that the framing is correct and that the camera is level.
+   3. Make sure that the viewer shows the shoulders, the hips, and the two wrists.
+   4. Let the recording continue for the full session. Do not stop it between trials.
+
+   The `--record` flag writes only an HDF5 file. It does not write an `.rrd` file or an mp4 file,
+   unless you also use `--save` or `--record-video`. The software blurs the faces by default. You
+   divide the recording into segments later, in `annotate`.
+
+   > **NOTE:** The `pixi run record` command also makes the same HDF5 file. But it does not show
+   > the camera image, so you cannot see the framing. When a display is available, use the
+   > `rerun` command.
 
 ---
 
-## 3. The trials — what Remy does, per exercise type
+## 2. Calibration segment — always first (approximately 10 s)
 
-Run **four exercise types**. For **each type**: warm-up already done, then **3 trials** with
-unhurried rest between them (this is not a timed clinical exam). If he tires before 3, record
-what you get and note it — a 2-trial day is still usable, just with a wider error estimate.
+> **WARNING:** Record the calibration segment at the start of each session. If you do not record
+> it, you cannot use the hold numbers from that day. The notebook cannot find the error.
 
-**Rotate the order of the four types across sessions** (sit → stand → transition → crawl one
-day; crawl → sit → transition → stand the next) so fatigue doesn't always penalize whichever
-is last.
+Tell Remy to sit or stand straight and to stay still for approximately 10 seconds. He must face
+the camera (front view, the same view as for the holds). Later, give this segment the label
+**`calib;pose=upright`**. The notebook uses this segment to find the vertical reference before you
+use a hold number.
 
-| Type | Camera view | What to have Remy do | Trial length | Label to use afterward |
+---
+
+## 3. The trials — what Remy does for each exercise type
+
+Do **four exercise types**. Do the warm-up first. Then, for each type, do **3 trials**. Let Remy
+rest between the trials. This is not a timed clinical test, so do not hurry.
+
+If Remy is tired before the third trial, record the trials that you have. Write a note about it.
+A day with 2 trials is satisfactory, but the error estimate is larger.
+
+**Change the sequence of the four types in each session.** For example, use sit → stand →
+transition → crawl on one day. Then use crawl → sit → transition → stand on the next day. Thus,
+fatigue does not always have an effect on the same type.
+
+| Type | Camera view | What Remy does | Trial length | Label (type it later) |
 |---|---|---|---|---|
-| **Sitting hold** | **Front** (facing camera) | Sit on the mat and hold. Note honestly whether arms are free, propping on the floor, or held, and whether anyone supports his trunk/pelvis. | Until he loses interest or posture | `sit_hold;arms={free\|prop\|held};support={none\|trunk\|pelvis};gmfm=<item#>` |
-| **Standing hold** | **Back** (facing away, toward the support) | Stand at the support and hold, noting the support used. Back view because he stands against a support that a front view can't see past. | Until he loses interest or posture | `stand_hold;support={hands_held\|trunk\|furniture};gmfm=<item#>` |
-| **Transition** | **Front / three-quarter** | A single posture change, e.g. prone→sit or sit→prone. Note the side he leads/pushes from. Keep the view so both shoulders and both hips stay visible through the whole move. | Naturally short | `transition;from={prone\|sit};to={prone\|sit};side={left\|right};gmfm=<item#>` |
-| **Crawl** | **Broadside** (travels across frame) | One crawl/belly-crawl bout across the mat, moving left↔right across the frame. Keep him slightly oblique so **both** wrists stay visible. Note direction of travel. | Naturally short (a few cycles) | `crawl;style=belly;dir={left\|right\|toward\|away};gmfm=<item#>` |
+| **Sitting hold** | **Front** (Remy faces the camera) | Remy sits on the mat and holds the position. Write if his arms are free, on the floor, or held. Write if a person holds his trunk or pelvis. | Until he stops or loses the posture | `sit_hold;arms={free\|prop\|held};support={none\|trunk\|pelvis};gmfm=<item#>` |
+| **Standing hold** | **Back** (Remy faces away, toward the support) | Remy stands at the support and holds the position. Write which support he uses. Use the back view, because the support blocks a front view. | Until he stops or loses the posture | `stand_hold;support={hands_held\|trunk\|furniture};gmfm=<item#>` |
+| **Transition** | **Front or three-quarter** | Remy does one posture change, for example prone→sit or sit→prone. Write the side that he pushes from. Keep the two shoulders and the two hips in the view for the full movement. | Short | `transition;from={prone\|sit};to={prone\|sit};side={left\|right};gmfm=<item#>` |
+| **Crawl** | **Broadside** (Remy moves across the frame) | Remy does one crawl or belly-crawl across the mat, from left to right or right to left. Put him at a small angle to the camera, so that the two wrists stay in view. Write the direction of movement. | Short (a few cycles) | `crawl;style=belly;dir={left\|right\|toward\|away};gmfm=<item#>` |
 
-### Why these views (from the signal definitions)
+### Why the runbook uses these views
 
-- **Holds and transitions → front or back, never profile.** Every hold/transition metric is
-  built on `trunk_vector` (`signals.py`) = `mid_shoulder − mid_hip`, so it needs **both**
-  shoulders (11, 12) and **both** hips (23, 24). Front *and* back keep those left/right pairs
-  separated in the image, so the midpoints come from real, visible points — the two views are
-  metrically equivalent for everything this package computes (MediaPipe may swap the left/right
-  labels from behind, but the midpoints are symmetric, so `trunk_vector` is unaffected). A
-  **profile view self-occludes** the far-side landmark, and MediaPipe *extrapolates* the hidden
-  one rather than dropping it — those frames still pass `pose_present` carrying invented
-  coordinates, silently degrading the trunk vector without failing `coverage`.
-- **Standing hold → back**, because Remy stands against a support a front camera can't see
-  past. This is a fine substitute: back is metrically equivalent to front here (previous bullet),
-  and face-blur still works (the pose/hybrid backend redacts the head region from pose keypoints,
-  which are still detected from behind). Sitting hold and calibration stay front.
-- **Front keeps the reliable sway axis reliable.** `project_horizontal` returns `(ML, AP)`
-  where **ML (side-to-side) is in the image plane and measured well; AP (forward/back) is
-  inferred depth and much noisier.** The sway framework assumes ML is the trustworthy axis, and
-  a front view honors that. You *cannot* make both axes reliable with one camera — a side view
-  would only trade a reliable ML for a noisy-landmark trunk vector, no net win. `trunk_angle` is
-  **unsigned** anyway, so a side view buys nothing for lean magnitude.
-- **Crawl is the exception → broadside.** The crawl signal is the wrist projected on the trunk
-  axis plus pelvis translation across the frame (`com_norm`), so the body must *travel across*
-  the image. Keep him slightly oblique rather than a dead profile so both wrists stay
-  unoccluded.
-- **Calibration → front,** matching the holds it's the vertical reference for.
-- **Pick one view per exercise and use it identically every session** — trend comparability
-  depends on the fixed geometry, not just the metrics.
+- **Use the front or back view for holds and transitions. Do not use a side view.** All hold
+  metrics and transition metrics use `trunk_vector` (`signals.py`), which is
+  `mid_shoulder − mid_hip`. Thus, these metrics need the two shoulders (11, 12) and the two hips
+  (23, 24).
+- In the front view and in the back view, the left and right points are apart in the image.
+  Thus, the midpoints come from real points that the camera can see. The two views give the same
+  metrics. MediaPipe can change the left and right labels in the back view. The midpoints do not
+  change, so `trunk_vector` stays correct.
+- In a side view, the near side of the body hides the far-side landmarks. MediaPipe does not
+  remove a hidden landmark. It calculates an estimated position. These frames pass
+  `pose_present` with incorrect coordinates. The trunk vector becomes less accurate, but
+  `coverage` does not show the problem.
+- **Use the back view for the standing hold.** Remy stands against a support, and the support
+  blocks a front view. The back view gives the same metrics as the front view (see the previous
+  item). The face blur also works. The pose and hybrid backends find the head from the pose
+  keypoints, and MediaPipe finds these keypoints from behind. Use the front view for the sitting
+  hold and for the calibration.
+- **The front view keeps the reliable sway axis reliable.** `project_horizontal` gives `(ML, AP)`.
+  ML (side to side) is in the image plane, so its measurement is good. AP (forward and back) comes
+  from an estimated depth, so it has much more noise.
+- The sway metrics use ML as the reliable axis, and a front view agrees with this. One camera
+  cannot make the two axes reliable. A side view gives a reliable AP axis, but it makes the trunk
+  vector less accurate. Also, `trunk_angle` has no sign, so a side view does not improve the lean
+  value.
+- **Use a broadside view for the crawl.** The crawl signal is the wrist position along the trunk
+  axis and the pelvis movement across the frame (`com_norm`). Thus, the body must move across the
+  image. Put Remy at a small angle to the camera, so that the two wrists stay in view. Do not use
+  a full side view.
+- **Use the front view for the calibration.** The calibration is the vertical reference for the
+  holds, so it uses the same view as the holds.
+- **Use the same view for each exercise in each session.** You can compare trends only when the
+  geometry stays the same.
 
-Notes that matter for the numbers:
+Notes about the numbers:
 
-- **`arms=free` / `support=none` are *assertions in the label*, not detections.** The code
-  trusts what you type. Be honest — a mislabeled support level splits your baseline.
-- `gmfm=<item#>` is optional and free-text: copy the item number straight off the GMFM-88
-  score sheet if you're tracking one. It's never validated, so any value is accepted.
+- **The values `arms=free` and `support=none` are what you state in the label.** The software does
+  not measure them. The software accepts the value that you type. Type the correct value. An
+  incorrect support level divides your baseline into two groups.
+- The `gmfm=<item#>` field is optional, and you can type any text in it. If you use the GMFM-88
+  score sheet, copy the item number from the sheet. The software does not do a check of this
+  value.
 
-### GMFM-88 item lookup — fill in from the score sheet, once
+### GMFM-88 item numbers — complete this table one time
 
-The code deliberately does **not** hard-code GMFM item numbers (`labels.py`: the numbering lives
-behind the manual, and a wrong constant compared across months is worse than none). So fill this
-table in **once**, against Remy's actual GMFM-88 score sheet (ideally with his PT), and reuse it
-every session instead of re-deriving the number at each `annotate` prompt. The dimension each
-exercise falls in (B = sitting, C = crawling, D = standing) is fixed by `labels.DIMENSIONS`; only
-the item number is yours to confirm.
+The software does not contain GMFM item numbers. The item numbers come from the manual, and an
+incorrect number in the software would cause errors in comparisons across months. See
+`labels.py` for this decision.
 
-> **Verify the number *and its wording* before trusting it.** The "candidate item" column is the
-> commonly-published numbering as a starting point, **not** verified to the manual — confirm each
-> against the score sheet. Enter the item that matches what Remy *actually did*; the label's
-> `arms=`/`support=` fields and the `gmfm=` number must describe the **same** trial.
+Complete this table one time, with Remy's GMFM-88 score sheet. If possible, do this with his
+physical therapist. Then use the table in each session at the `annotate` prompt.
 
-> **`gmfm=` is optional and never affects a metric.** No quality gate or continuous-variable
-> analysis reads it (it appears nowhere in `motor_metrics/*.py` outside `labels.py`) — it rides
-> along only as a `p_gmfm` cross-reference to the score sheet. So a missing or unconfirmed number
-> must **never block a session**: record the exercise plus its `arms=`/`support=`/`side=`/`dir=`
-> fields (those *do* drive grouping), and add `gmfm=` later — `annotate` edits save in place, so
-> it can be filled in after the fact once confirmed.
+`labels.DIMENSIONS` sets the GMFM-88 dimension of each exercise (B = sitting,
+C = crawling, D = standing). You must find only the item number.
 
-| Label you'll record | Dim | Candidate item (verify!) | Item wording (from your sheet) | **Confirmed item #** |
+> **CAUTION:** Make sure that each item number and its text agree with the score sheet. The
+> "Candidate item" column shows numbers from published sources. These numbers are only a start
+> point. They are not checked against the manual. Use the item that agrees with the movement that
+> Remy did. The `arms=` field, the `support=` field, and the `gmfm=` number must all be for the
+> same trial.
+
+> **NOTE:** The `gmfm=` field is optional, and it has no effect on the metrics. No quality gate
+> and no analysis uses it. In `motor_metrics/`, only `labels.py` refers to it. It is in the output only
+> as the `p_gmfm` column, so that you can find the item on the score sheet.
+>
+> Do not stop a session because you do not have a number. Record the exercise and its `arms=`,
+> `support=`, `side=`, and `dir=` fields, because these fields control the groups. You can add
+> `gmfm=` later. The `annotate` tool saves edits in the file.
+
+| Label to record | Dim | Candidate item (make sure) | Item text (from your sheet) | **Confirmed item #** |
 |---|---|---|---|---|
 | `sit_hold;arms=free;support=none` | B | B24 (or B34 on a bench) | Sit on mat, arms free, maintains 3 s | `____` |
 | `sit_hold;arms=prop` | B | B23 | Sit on mat, arm-propping, maintains 5 s | `____` |
 | `sit_hold;support=trunk` | B | B21 / B22 | Sit, supported at thorax, head upright / midline, 3 s | `____` |
 | `transition;from=sit;to=prone` | B | B30 | Sit on mat, lowers self to prone with control | `____` |
-| `transition;from=prone;to=sit` | B | *depends on the movement* | Prone→sit; pick the item matching what he does | `____` |
+| `transition;from=prone;to=sit` | B | *Use the item for the movement that he does* | Prone→sit; select the item for the movement | `____` |
 | `crawl;style=belly` | C | C39 | Prone, creeps/commando-crawls forward 1.8 m | `____` |
 | `stand_hold;support=furniture` | D | D48 | Standing, holding onto large bench with both hands | `____` |
-| `stand_hold;support=hands_held` | D | *held-standing item in D* | Standing, held by an adult | `____` |
+| `stand_hold;support=hands_held` | D | *The held-standing item in D* | Standing, held by an adult | `____` |
+
+The "Item text" column copies the text of the score sheet, so it does not use STE.
 
 ---
 
 ## 4. After the session — annotate and label
 
-1. `pixi run annotate YYYY-MM-DD_HHMM_<setupid>.h5`
-2. Scrub the recording; use `i`/`o` to mark in/out points of each segment, then type the
-   label at the terminal prompt **in the vocabulary above — not free text.**
-3. Label the calibration segment `calib;pose=upright` and each trial with its exact label.
-   Mark any ruined stretch (a hand crossing the torso, an interruption) as
-   **`exclude;reason=<what happened>`** — the analysis drops any trial overlapping an
-   exclusion whole rather than trimming around it, so mark two good trials *around* a bad
-   middle if needed.
-4. Edits save immediately.
+1. Type `pixi run annotate YYYY-MM-DD_HHMM_<setupid>.h5`.
+2. Move through the recording. Push `i` at the start of a segment. Push `o` at the end of the
+   segment.
+3. At the terminal prompt, type the label. Use the vocabulary in this runbook. Do not type free
+   text.
+4. Give the calibration segment the label `calib;pose=upright`. Give each trial its correct label.
+5. If a part of the recording is bad, give it the label **`exclude;reason=<what happened>`**. For
+   example, a hand goes across the torso, or a person stops the trial.
+
+   The analysis removes all of each trial that touches an `exclude` segment. It does not cut the
+   bad part from the trial. Thus, if the middle of a trial is bad, mark two good trials, one
+   before and one after the bad part.
+
+The `annotate` tool saves each edit immediately.
 
 ---
 
-## 5. Quality gates — check before trusting the day
+## 5. Quality gates — do these checks before you use the data for the day
 
-Run `pixi run metrics YYYY-MM-DD_HHMM_<setupid>.h5 --csv out.csv` and check each trial row:
+Type `pixi run metrics YYYY-MM-DD_HHMM_<setupid>.h5 --csv out.csv`. Then do a check of each trial
+row:
 
-- [ ] **`coverage ≥ 0.8`** per trial. Below 0.5 → mark `exclude` and re-shoot, don't salvage.
-- [ ] **`tracked_s` close to `duration_s`** — a big gap means an occlusion mid-trial.
-- [ ] **`warnings` column empty** — anything there is a label typo; fix the annotation.
-- [ ] **Calibration diagnostic near 0°** (the notebook's vertical-reference check,
-      `pixi run notebook`). If it's off, the camera was tilted all session — re-level before
-      next time and treat that session's trunk/sway numbers as biased.
-
----
-
-## 6. Number of trials / sessions — the bigger picture
-
-- **Per session:** 1 calibration + **3 trials × 4 exercise types = 12 trials** (fewer if he
-  tires; that's fine).
-- **Reliability sub-study (do this first, before trusting any trend):** **2 sessions/day**
-  ≥ 2 hours apart, **3 days/week for 3 weeks** = **nine same-day pairs**. Same-day pairing
-  holds real development constant, so morning-vs-afternoon differences estimate measurement
-  noise. From these, per metric, compute `SEM = SD_within` and `MDC95 = 1.96 × √2 × SEM` —
-  the smallest change later that counts as real.
-- **Do the scale + trunk-angle concurrent checks on at least the first session of every
-  reliability block** (protractor on a frozen `calib` frame for trunk angle; tape-measured
-  shoulder width vs. `landmarks_world` over the `calib` segment for scale).
+- [ ] **`coverage ≥ 0.8`** for each trial. If the value is less than 0.5, mark the trial `exclude`
+      and record it again. Do not try to repair it.
+- [ ] **`tracked_s` is near `duration_s`.** A large difference shows that something blocked the
+      camera during the trial.
+- [ ] **The `warnings` column is empty.** A value in this column shows an error in a label. Correct
+      the annotation.
+- [ ] **The calibration result is near 0°.** Use the vertical-reference check in the notebook
+      (`pixi run notebook`). If the result is not near 0°, the camera had a tilt for the full
+      session. Make the camera level before the next session. The trunk numbers and sway numbers
+      from that session have an error.
 
 ---
 
-## 7. File / data hygiene
+## 6. Number of trials and sessions
 
-- **Filename:** `YYYY-MM-DD_HHMM_<setupid>.h5` — bump `setupid` only when the camera
-  physically moves.
-- **Keep every raw `.h5` forever** — metrics are recomputed on read, so future `derive.py`
-  changes can re-run history.
-- **Record the git commit hash** with each exported metrics batch — SPARC and sway velocity
-  are only comparable across an identical filter chain.
-- **Store reliability-block repeats separately** from ongoing trend sessions.
+- **For each session:** 1 calibration + **3 trials × 4 exercise types = 12 trials**. If Remy is
+  tired, fewer trials are satisfactory.
+- **Reliability sub-study:** Do this sub-study first, before you use a trend.
+  1. Do **2 sessions each day**, with a minimum of 2 hours between them.
+  2. Do this on **3 days each week for 3 weeks**. This gives **nine same-day pairs**.
+
+  Remy does not develop much in one day. Thus, a difference between the morning and the
+  afternoon shows the measurement noise. For each metric, calculate `SEM = SD_within` and
+  `MDC95 = 1.96 × √2 × SEM`. `MDC95` is the smallest change that is real.
+- **Do the scale check and the trunk-angle check in the first session of each reliability block.**
+  For the trunk angle, use a protractor on a frozen `calib` frame. For the scale, compare the
+  measured shoulder width with `landmarks_world` during the `calib` segment.
 
 ---
 
-## Keep front-of-mind while collecting
+## 7. Files and data
 
-- **Sway magnitudes have no home reference standard** — a second phone at another angle only
-  confirms bigger/smaller, not the absolute meters. The meters themselves are MediaPipe's
-  estimate of Remy's body size, not a calibrated measurement; the monthly body-scale check
-  catches *drift* in that estimate, which is all it can do.
-- **SPARC has no external ground truth** — its value is only meaningful against itself via the
-  trial-1-vs-trial-3 fatigue contrast.
-- Everything here is **n = 1**, about Remy against his own baseline.
+- **File name:** `YYYY-MM-DD_HHMM_<setupid>.h5`. Change the `setupid` only when you move the
+  camera to a different position.
+- **Keep all raw `.h5` files.** Do not delete them. The software calculates the metrics again each
+  time that it reads a file. Thus, after a change to `derive.py`, you can calculate all old
+  sessions again.
+- **Write the git commit hash with each set of exported metrics.** You can compare SPARC and sway
+  velocity only when the same filter chain calculated them.
+- **Keep the repeat sessions of the reliability block apart from the usual trend sessions.**
+
+---
+
+## Remember during the collection
+
+- **Sway values have no reference standard at home.** A second phone at a different angle can
+  show only if the sway is larger or smaller. It cannot show the value in meters.
+- The meter values come from the MediaPipe estimate of the body size of Remy. They are not a
+  calibrated measurement. The monthly body-scale check can find only a change in that estimate.
+- **SPARC has no external reference.** Compare its value only with other SPARC values. For
+  example, compare trial 1 with trial 3 to find the effect of fatigue.
+- All of this data is for **n = 1**. It compares Remy only with his own baseline.

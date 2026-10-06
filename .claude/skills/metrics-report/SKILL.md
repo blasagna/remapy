@@ -6,7 +6,7 @@ description: Produce motor-metrics output — per-trial tables for one recording
 # Produce a metrics report
 
 Turn labeled recordings into the numbers that show change over time. Metrics are computed **offline**
-and **derived on read** — never frozen into the `.h5`. Detail in `motor_metrics/CLAUDE.md`.
+and **derived on read** — never frozen into the `.h5`. Detail in `motor_metrics/AGENTS.md`.
 
 ## Single recording — per-trial table
 
