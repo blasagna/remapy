@@ -62,4 +62,4 @@ udisksctl unmount -b "$dev"
 - Switching transports = re-copy the other build's `code.py` (step 2); the shared modules are the
   same. A `circup uninstall`/reflash wipes `lib/`, so re-run the `circup install` from step 1 after.
 - Once streaming, read it from the host with `pixi run rerun --feather` / `--feather-transport ble`,
-  or the standalone `read_stream.py` / `read_ble.py` CLIs. See `adafruit_feather_sense/CLAUDE.md`.
+  or the standalone `read_stream.py` / `read_ble.py` CLIs. See `adafruit_feather_sense/AGENTS.md`.

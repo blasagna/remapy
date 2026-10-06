@@ -5,7 +5,7 @@ Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are re
 
 - **Philosophy:** persist the face-blurred video + the pose model's raw landmark outputs, and
   recompute anything derivable (joint angles, fps, pose-present, 2D pixel points) from those.
-  (This derive-on-read / minimal-raw rule is a repo-wide convention — see root `CLAUDE.md`.)
+  (This derive-on-read / minimal-raw rule is a repo-wide convention — see root `AGENTS.md`.)
 - **Video-in-HDF5:** frames are stored as per-frame JPEG blobs in a `vlen` uint8 dataset (frame
   `i` aligns with landmark row `i`). Chosen over an mp4 sidecar because **H.264 is unavailable**
   in this OpenCV build (VideoWriter only does `mp4v`/`XVID`/`MJPG`).
@@ -48,4 +48,4 @@ Rerun `.rrd`. Stores only the **minimal raw** signals; derived quantities are re
 Integration tests drive the real `HDF5Recorder` → `AnnotationStore` → `Recording` path against
 temp files (fast, self-contained). The recorder's `/feather` datasets + `Recording.feather` — including
 that derived streams are *not* stored and that `motion(tau_s=…)` re-derives — are covered in
-`tests/test_feather.py` (see `adafruit_feather_sense/CLAUDE.md`).
+`tests/test_feather.py` (see `adafruit_feather_sense/AGENTS.md`).

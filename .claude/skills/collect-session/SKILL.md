@@ -6,7 +6,7 @@ description: The data-collection runbook — capture a recording, eyeball pose-q
 # Collect and label a therapy session
 
 The end-to-end pipeline that turns a live capture into labeled trials the `motor_metrics` package can
-measure. Each step is an existing CLI; the detail behind each lives in that package's `CLAUDE.md`.
+measure. Each step is an existing CLI; the detail behind each lives in that package's `AGENTS.md`.
 
 This skill covers the CLI mechanics. How a session is administered (camera setup, the calibration
 segment recorded first and labeled `calib;pose=upright`, trial order and counts, the exact label for

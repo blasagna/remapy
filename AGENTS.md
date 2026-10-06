@@ -1,11 +1,14 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working with code in this repository. Claude Code
+reads it through the `CLAUDE.md` beside it, which only imports this file (`@AGENTS.md`); put
+content here, not in a `CLAUDE.md`.
 
-**How this doc is organized:** each package's deep-dive lives in a nested `CLAUDE.md` inside that
-package's directory, loaded on demand only when you work with files there. This root file is the
+**How this doc is organized:** each package's deep-dive lives in a nested `AGENTS.md` inside that
+package's directory (with the same one-line `CLAUDE.md` import beside it), loaded on demand only
+when you work with files there. This root file is the
 always-loaded index: project overview, the package map, repo-wide conventions, environment/commands,
-and the shared test harness. When you touch a package, read its own `CLAUDE.md` for the detail and
+and the shared test harness. When you touch a package, read its own `AGENTS.md` for the detail and
 the invariants that constrain that code.
 
 ## Project status
@@ -17,21 +20,21 @@ Feather Sense IMU stream.
 
 ## Packages
 
-Each entry links to the package's own `CLAUDE.md` (loaded on demand when you work in that directory).
+Each entry links to the package's own `AGENTS.md` (loaded on demand when you work in that directory).
 
-- `video_capture/` — OpenCV capture wrapper (`VideoCapture`) + demo CLI → `video_capture/CLAUDE.md`
-- `pose_estimation/` — MediaPipe pose skeleton + joint angles → `pose_estimation/CLAUDE.md`
-- `face_blur/` — MediaPipe face redaction (detector / pose / hybrid backends) → `face_blur/CLAUDE.md`
-- `rerun_viewer/` — streams the pipeline to the Rerun viewer + offline replay → `rerun_viewer/CLAUDE.md`
-- `recording/` — compact HDF5 session recording for offline analysis → `recording/CLAUDE.md`
-- `annotate/` — scrub a recording and label time segments → `annotate/CLAUDE.md`
-- `motor_metrics/` — continuous motor metrics for GMFM-88 trials (offline + live) → `motor_metrics/CLAUDE.md`
-- `list_devices/` — enumerate compatible capture devices → `list_devices/CLAUDE.md`
-- `adafruit_feather_sense/` — CircuitPython IMU streamer (serial/BLE) + host readers → `adafruit_feather_sense/CLAUDE.md`
+- `video_capture/` — OpenCV capture wrapper (`VideoCapture`) + demo CLI → `video_capture/AGENTS.md`
+- `pose_estimation/` — MediaPipe pose skeleton + joint angles → `pose_estimation/AGENTS.md`
+- `face_blur/` — MediaPipe face redaction (detector / pose / hybrid backends) → `face_blur/AGENTS.md`
+- `rerun_viewer/` — streams the pipeline to the Rerun viewer + offline replay → `rerun_viewer/AGENTS.md`
+- `recording/` — compact HDF5 session recording for offline analysis → `recording/AGENTS.md`
+- `annotate/` — scrub a recording and label time segments → `annotate/AGENTS.md`
+- `motor_metrics/` — continuous motor metrics for GMFM-88 trials (offline + live) → `motor_metrics/AGENTS.md`
+- `list_devices/` — enumerate compatible capture devices → `list_devices/AGENTS.md`
+- `adafruit_feather_sense/` — CircuitPython IMU streamer (serial/BLE) + host readers → `adafruit_feather_sense/AGENTS.md`
 
 ## Global conventions
 
-Repo-wide rules that apply across packages (package-specific rules live in each nested `CLAUDE.md`):
+Repo-wide rules that apply across packages (package-specific rules live in each nested `AGENTS.md`):
 
 - **Derive-on-read, never written back.** Persist only the **minimal raw** signals; recompute
   anything derivable (joint angles, fps, pose-present, 2D points, `gravity`/`linear_accel`) on read.
@@ -110,7 +113,7 @@ Multi-step procedures are captured as skills under `.claude/skills/` (loaded on 
 `tests/` holds `unittest` coverage for the reusable libraries (not the CLIs). Run with `pixi run
 test`. Every external boundary is mocked so the suite needs no camera, network, model download,
 display, or GPU; the full suite runs in a few seconds. **Per-file test notes live in each package's nested
-`CLAUDE.md`** (e.g. `tests/test_motor_metrics.py` and `tests/test_live.py` under `motor_metrics/`,
+`AGENTS.md`** (e.g. `tests/test_motor_metrics.py` and `tests/test_live.py` under `motor_metrics/`,
 `tests/test_feather.py` under `adafruit_feather_sense/`, `tests/test_viewer.py` under `rerun_viewer/`,
 `tests/test_annotate.py` under `annotate/`). Shared harness conventions:
 

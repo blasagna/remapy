@@ -309,7 +309,7 @@ Find which cause is correct. Do not guess.
 ### Long time scale: the monthly trend and the reports of the physical therapist
 
 There is no independent numerical score for calibration. Remy does not have a series of GMFM
-scores from a physical therapist (see `motor_metrics/CLAUDE.md`). Use this check as an
+scores from a physical therapist (see `motor_metrics/AGENTS.md`). Use this check as an
 approximate check, not as a statistical test.
 
 1. Wait until his physical therapist or you see a change in his ability.
@@ -381,7 +381,7 @@ does these checks by eye. This section does not repeat the automatic checks of t
   consistent with itself, and it resists noise up to a limit. It is not an absolute score. The
   known-contrast design in the Sensitivity section is the only validity data for SPARC.
 - **The protocol uses only the camera.** The Feather Sense IMU is not in this phase (see
-  `motor_metrics/CLAUDE.md`). Thus, there is no inertial check of the sway or the trunk angle.
+  `motor_metrics/AGENTS.md`). Thus, there is no inertial check of the sway or the trunk angle.
 - **The manual reference standards also have errors.** A person who counts arm pulls or reads a
   protractor on a frozen frame can make errors. Use the concurrent validity checks to find large
   disagreements. They do not prove precision.

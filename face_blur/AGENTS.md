@@ -44,4 +44,4 @@ pose|hybrid` lazily spins up a `PoseEstimator` for the displayed frames.
 ## Tests
 
 Pure logic (`redact`, `pose_blur`, `factory`) runs unmocked against real NumPy/OpenCV — see the
-root `CLAUDE.md` Tests section for the shared harness conventions.
+root `AGENTS.md` Tests section for the shared harness conventions.
